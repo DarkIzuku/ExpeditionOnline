@@ -22,9 +22,14 @@ using RC::Unreal::FRotator;
 using RC::Unreal::FVector;
 using RC::Unreal::UClass;
 using RC::Unreal::UObject;
-using RC::Unreal::UObjectGlobals;
+namespace UObjectGlobals = RC::Unreal::UObjectGlobals;
 
 thread_local bool in_bridge_tick{};
+
+auto object_is_valid(UObject* object) -> bool
+{
+    return object != nullptr && !object->IsUnreachable();
+}
 
 auto widen(std::string_view value) -> std::wstring
 {
@@ -48,22 +53,22 @@ auto narrow(std::wstring_view value) -> std::string
 
 auto object_name(UObject* object) -> std::string
 {
-    return object && object->IsValid() ? narrow(object->GetFullName()) : std::string{};
+    return object_is_valid(object) ? narrow(object->GetFullName()) : std::string{};
 }
 
 auto object_property(UObject* object, const std::string& property_name) -> UObject*
 {
-    if (!object || !object->IsValid()) return nullptr;
+    if (!object_is_valid(object)) return nullptr;
     const auto wide_name = widen(property_name);
-    auto** value = object->GetValuePtrByPropertyNameInChain<UObject*>(wide_name);
-    return value != nullptr && *value != nullptr && (*value)->IsValid() ? *value : nullptr;
+    auto** value = object->GetValuePtrByPropertyNameInChain<UObject*>(wide_name.c_str());
+    return value != nullptr && object_is_valid(*value) ? *value : nullptr;
 }
 
 auto set_object_property(UObject* object, const std::string& property_name, UObject* value) -> bool
 {
-    if (!object || !object->IsValid() || !value || !value->IsValid()) return false;
+    if (!object_is_valid(object) || !object_is_valid(value)) return false;
     const auto wide_name = widen(property_name);
-    auto** target = object->GetValuePtrByPropertyNameInChain<UObject*>(wide_name);
+    auto** target = object->GetValuePtrByPropertyNameInChain<UObject*>(wide_name.c_str());
     if (!target) return false;
     *target = value;
     return true;
@@ -71,9 +76,9 @@ auto set_object_property(UObject* object, const std::string& property_name, UObj
 
 auto call_no_args(UObject* object, const std::string& function_name) -> bool
 {
-    if (!object || !object->IsValid()) return false;
+    if (!object_is_valid(object)) return false;
     const auto wide_name = widen(function_name);
-    auto* function = object->GetFunctionByNameInChain(wide_name);
+    auto* function = object->GetFunctionByNameInChain(wide_name.c_str());
     if (!function) return false;
     object->ProcessEvent(function, nullptr);
     return true;
@@ -275,9 +280,9 @@ auto GameBridge::update_local_player() -> void
     snapshot.x = location.X();
     snapshot.y = location.Y();
     snapshot.z = location.Z();
-    snapshot.pitch = rotation.Pitch();
-    snapshot.yaw = rotation.Yaw();
-    snapshot.roll = rotation.Roll();
+    snapshot.pitch = rotation.GetPitch();
+    snapshot.yaw = rotation.GetYaw();
+    snapshot.roll = rotation.GetRoll();
     network_.enqueue(protocol::make_frame(protocol::MessageType::transform_snapshot,
                                           network_.next_sequence(),
                                           snapshot));
@@ -298,16 +303,16 @@ auto GameBridge::update_remote_players() -> void
 auto GameBridge::find_local_pawn() -> AActor*
 {
     const auto controller_name = widen(config_.controller_class);
-    auto* controller = UObjectGlobals::FindFirstOf(controller_name);
+    auto* controller = UObjectGlobals::FindFirstOf(controller_name.c_str());
     auto* pawn = object_property(controller, config_.pawn_property);
-    return pawn && pawn->IsValid() ? static_cast<AActor*>(pawn) : nullptr;
+    return object_is_valid(pawn) ? static_cast<AActor*>(pawn) : nullptr;
 }
 
 auto GameBridge::current_zone(AActor* pawn) -> std::string
 {
-    if (!pawn || !pawn->IsValid()) return {};
-    if (auto* level = pawn->GetLevel(); level && level->IsValid()) return narrow(level->GetFullName());
-    if (auto* world = pawn->GetWorld(); world && world->IsValid()) return narrow(world->GetFullName());
+    if (!object_is_valid(pawn)) return {};
+    if (auto* level = pawn->GetLevel(); object_is_valid(level)) return narrow(level->GetFullName());
+    if (auto* world = pawn->GetWorld(); object_is_valid(world)) return narrow(world->GetFullName());
     return {};
 }
 
@@ -315,7 +320,7 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
 {
     protocol::AppearanceState appearance;
     appearance.player_id = local_player_id_;
-    appearance.character_class = object_name(pawn->GetClass());
+    appearance.character_class = object_name(pawn->GetClassPrivate());
     auto* body_component = object_property(pawn, config_.body_component_property);
     auto* hair_component = object_property(pawn, config_.hair_component_property);
     appearance.outfit_mesh = object_name(object_property(body_component, config_.mesh_asset_property));
@@ -325,7 +330,7 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
 
 auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remote) -> AActor*
 {
-    if (remote.actor && remote.actor->IsValid()) return remote.actor;
+    if (object_is_valid(remote.actor)) return remote.actor;
     auto* local_pawn = find_local_pawn();
     if (!local_pawn || !remote.transform) return nullptr;
 
@@ -362,9 +367,9 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
     else
     {
         const auto short_name = widen(class_spec);
-        if (auto* template_actor = UObjectGlobals::FindFirstOf(short_name); template_actor && template_actor->IsValid())
+        if (auto* template_actor = UObjectGlobals::FindFirstOf(short_name.c_str()); object_is_valid(template_actor))
         {
-            actor_class = template_actor->GetClass();
+            actor_class = template_actor->GetClassPrivate();
         }
     }
     if (!actor_class)
@@ -374,12 +379,12 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
     }
 
     auto* world = local_pawn->GetWorld();
-    if (!world || !world->IsValid()) return nullptr;
+    if (!object_is_valid(world)) return nullptr;
     const auto& state = *remote.transform;
     FVector location(state.x, state.y, state.z);
     FRotator rotation(state.pitch, state.yaw, state.roll);
     remote.actor = world->SpawnActor(actor_class, &location, &rotation);
-    if (!remote.actor || !remote.actor->IsValid())
+    if (!object_is_valid(remote.actor))
     {
         remote.actor = nullptr;
         logger_.warning("REMOTE_SPAWN_FAILED player=" + std::to_string(player_id) + " class=" + class_spec);
@@ -394,7 +399,7 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
 
 auto GameBridge::apply_remote_transform(RemotePlayer& remote) -> void
 {
-    if (!remote.actor || !remote.actor->IsValid() || !remote.transform) return;
+    if (!object_is_valid(remote.actor) || !remote.transform) return;
     const auto& state = *remote.transform;
     FVector location(state.x, state.y, state.z);
     FRotator rotation(state.pitch, state.yaw, state.roll);
@@ -404,7 +409,7 @@ auto GameBridge::apply_remote_transform(RemotePlayer& remote) -> void
 
 auto GameBridge::apply_remote_appearance(RemotePlayer& remote) -> void
 {
-    if (!remote.actor || !remote.actor->IsValid() || !remote.appearance) return;
+    if (!object_is_valid(remote.actor) || !remote.appearance) return;
     auto* body_component = object_property(remote.actor, config_.body_component_property);
     auto* hair_component = object_property(remote.actor, config_.hair_component_property);
     bool changed{};
@@ -424,12 +429,12 @@ auto GameBridge::apply_remote_appearance(RemotePlayer& remote) -> void
 
 auto GameBridge::disable_remote_ai(AActor* actor) -> void
 {
-    if (!actor || !actor->IsValid()) return;
+    if (!object_is_valid(actor)) return;
     actor->SetActorEnableCollision(false);
     actor->SetActorTickEnabled(false);
     auto* controller = object_property(actor, config_.controller_property);
     call_no_args(controller, "StopMovement");
-    if (controller && controller->IsValid())
+    if (object_is_valid(controller))
     {
         static_cast<AActor*>(controller)->SetActorTickEnabled(false);
         auto* brain = object_property(controller, config_.brain_component_property);
@@ -443,7 +448,7 @@ auto GameBridge::destroy_remote(std::uint64_t player_id) -> void
 {
     const auto found = remotes_.find(player_id);
     if (found == remotes_.end()) return;
-    if (found->second.actor && found->second.actor->IsValid())
+    if (object_is_valid(found->second.actor))
     {
         found->second.actor->K2_DestroyActor();
         logger_.info("REMOTE_DESTROYED player=" + std::to_string(player_id));
@@ -456,7 +461,7 @@ auto GameBridge::destroy_all_remotes() -> void
     for (auto& [player_id, remote] : remotes_)
     {
         (void)player_id;
-        if (remote.actor && remote.actor->IsValid()) remote.actor->K2_DestroyActor();
+        if (object_is_valid(remote.actor)) remote.actor->K2_DestroyActor();
     }
     remotes_.clear();
 }

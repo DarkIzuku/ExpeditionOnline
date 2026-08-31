@@ -85,6 +85,15 @@ jobs:
           $unreal = git -C ue4ss-source/deps/first/Unreal rev-parse HEAD
           if ($unreal -ne "b7f3d809cf2d8d44e0217be62b4da2035bb15215") { throw "UEPseudo revision mismatch: $unreal" }
 
+      - name: Restore pinned UE4SS build cache
+        id: ue4ss-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/client
+            build/ue4ss-dependencies
+          key: ue4ss-base-windows-msvc18-${{ env.UE4SS_BUILD_REVISION }}-v1
+
       - name: Configure native UE4SS client
         shell: pwsh
         run: |
@@ -99,6 +108,20 @@ jobs:
             -DFETCHCONTENT_QUIET=OFF `
             -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build pinned UE4SS base
+        if: steps.ue4ss-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: cmake --build build/client --target UE4SS --parallel
+
+      - name: Save pinned UE4SS build cache
+        if: steps.ue4ss-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/client
+            build/ue4ss-dependencies
+          key: ue4ss-base-windows-msvc18-${{ env.UE4SS_BUILD_REVISION }}-v1
 
       - name: Build real UE4SS main.dll
         shell: pwsh
