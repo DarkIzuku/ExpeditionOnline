@@ -1,0 +1,6 @@
+/build/
+/dist/
+/ue4ss-source/
+*.log
+*.pdb
+*.ilk

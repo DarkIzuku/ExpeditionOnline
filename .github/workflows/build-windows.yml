@@ -1,0 +1,168 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  UE4SS_BUILD_REVISION: 3a2d2bc127c857acdfc34ce1518712406d7b0a0d
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  build-windows-x64:
+    name: Release x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout ExpeditionOnline
+        uses: actions/checkout@v4
+
+      - name: Verify UE4SS source credential
+        shell: pwsh
+        env:
+          UEPSEUDO_PAT: ${{ secrets.UEPSEUDO_PAT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:UEPSEUDO_PAT)) {
+            throw "Missing repository secret UEPSEUDO_PAT. UE4SS's official private Re-UE4SS/UEPseudo submodule cannot be checked out without it. See docs/BUILDING.md."
+          }
+
+      - name: Checkout pinned official UE4SS source
+        uses: actions/checkout@v4
+        with:
+          repository: UE4SS-RE/RE-UE4SS
+          ref: ${{ env.UE4SS_BUILD_REVISION }}
+          path: ue4ss-source
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.UEPSEUDO_PAT }}
+
+      - name: Verify pinned UE4SS revisions
+        shell: pwsh
+        run: |
+          $actual = git -C ue4ss-source rev-parse HEAD
+          if ($actual -ne $env:UE4SS_BUILD_REVISION) { throw "UE4SS revision mismatch: $actual" }
+          $unreal = git -C ue4ss-source/deps/first/Unreal rev-parse HEAD
+          if ($unreal -ne "b7f3d809cf2d8d44e0217be62b4da2035bb15215") { throw "UEPseudo revision mismatch: $unreal" }
+
+      - name: Configure MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          vsversion: "18"
+
+      - name: Configure CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: latest
+
+      - name: Configure Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Build server, probe and tests
+        shell: pwsh
+        run: |
+          cmake -S . -B build/standalone -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DEXPEDITION_BUILD_CLIENT=OFF `
+            -DEXPEDITION_BUILD_SERVER=ON `
+            -DEXPEDITION_BUILD_PROBE=ON `
+            -DEXPEDITION_BUILD_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/standalone --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run unit tests
+        shell: pwsh
+        run: ctest --test-dir build/standalone --output-on-failure
+
+      - name: Run server and two-probe integration
+        shell: pwsh
+        run: .\scripts\test-relay.ps1 -Configuration Release -Port 27888 -BinDirectory build\standalone\bin
+
+      - name: Configure native UE4SS client
+        shell: pwsh
+        run: |
+          $env:FETCHCONTENT_BASE_DIR = "$env:GITHUB_WORKSPACE/build/ue4ss-dependencies"
+          cmake -S . -B build/client -G Ninja `
+            -DCMAKE_BUILD_TYPE=Game__Shipping__Win64 `
+            -DEXPEDITION_BUILD_CLIENT=ON `
+            -DEXPEDITION_BUILD_SERVER=OFF `
+            -DEXPEDITION_BUILD_PROBE=OFF `
+            -DEXPEDITION_BUILD_TESTS=OFF `
+            -DUE4SS_ROOT="$env:GITHUB_WORKSPACE/ue4ss-source" `
+            -DFETCHCONTENT_QUIET=OFF `
+            -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build real UE4SS main.dll
+        shell: pwsh
+        run: cmake --build build/client --target ExpeditionOnline --parallel
+
+      - name: Verify native PE outputs and UE4SS exports
+        shell: pwsh
+        run: |
+          $files = @(
+            "build/standalone/bin/ExpeditionOnlineServer.exe",
+            "build/standalone/bin/ExpeditionOnlineProbe.exe",
+            "build/client/package/UE4SS/Mods/ExpeditionOnline/dlls/main.dll"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Missing native output: $file" }
+            $length = (Get-Item -LiteralPath $file).Length
+            if ($length -lt 4096) { throw "Native output is empty or stub-sized: $file ($length bytes)" }
+            $headers = dumpbin /nologo /headers $file
+            if ($LASTEXITCODE -ne 0 -or $headers -notmatch "8664 machine") { throw "Not a valid Windows x64 PE: $file" }
+          }
+          $exports = dumpbin /nologo /exports "build/client/package/UE4SS/Mods/ExpeditionOnline/dlls/main.dll"
+          if ($exports -notmatch "\bstart_mod\b" -or $exports -notmatch "\buninstall_mod\b") {
+            throw "main.dll is not a loadable UE4SS C++ mod: lifecycle exports missing"
+          }
+
+      - name: Package Windows x64 ZIP
+        shell: pwsh
+        run: |
+          $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          .\scripts\package-windows.ps1 `
+            -BinDirectory build\standalone\bin `
+            -ClientPackageRoot build\client\package\UE4SS\Mods\ExpeditionOnline `
+            -OutputDirectory build\artifact `
+            -ExpeditionCommit "${{ github.sha }}" `
+            -UE4SSRevision "$env:UE4SS_BUILD_REVISION" `
+            -BuildDate $buildDate
+
+      - name: Verify final ZIP contents
+        shell: pwsh
+        run: |
+          $verify = "build/artifact-verify"
+          Expand-Archive -LiteralPath "build/artifact/ExpeditionOnline-Windows-x64.zip" -DestinationPath $verify
+          $root = Join-Path $verify "ExpeditionOnline-Windows-x64"
+          $required = @(
+            "Server/ExpeditionOnlineServer.exe",
+            "Probe/ExpeditionOnlineProbe.exe",
+            "UE4SS/Mods/ExpeditionOnline/dlls/main.dll",
+            "UE4SS/Mods/ExpeditionOnline/config/config.ini",
+            "docs/PROTOCOL.md",
+            "docs/QUICK_TEST.md",
+            "README.md",
+            "VERSION.txt",
+            "SHA256SUMS.txt"
+          )
+          foreach ($relative in $required) {
+            $path = Join-Path $root $relative
+            if (-not (Test-Path -LiteralPath $path)) { throw "ZIP is missing $relative" }
+            if ((Get-Item -LiteralPath $path).Length -eq 0 -and $relative -notlike "*enabled.txt") { throw "ZIP contains empty file: $relative" }
+          }
+
+      - name: Upload ExpeditionOnline-Windows-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExpeditionOnline-Windows-x64
+          path: build/artifact/ExpeditionOnline-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30

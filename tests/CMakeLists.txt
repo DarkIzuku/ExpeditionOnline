@@ -1,0 +1,8 @@
+add_executable(ExpeditionOnlineProtocolTests protocol_tests.cpp)
+target_link_libraries(ExpeditionOnlineProtocolTests PRIVATE ExpeditionOnlineProtocol)
+if(MSVC)
+    target_compile_options(ExpeditionOnlineProtocolTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(ExpeditionOnlineProtocolTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME protocol_round_trip COMMAND ExpeditionOnlineProtocolTests)
