@@ -140,10 +140,12 @@ jobs:
             $length = (Get-Item -LiteralPath $file).Length
             if ($length -lt 4096) { throw "Native output is empty or stub-sized: $file ($length bytes)" }
             $headers = dumpbin /nologo /headers $file
-            if ($LASTEXITCODE -ne 0 -or $headers -notmatch "8664 machine") { throw "Not a valid Windows x64 PE: $file" }
+            $headersText = $headers -join "`n"
+            if ($LASTEXITCODE -ne 0 -or $headersText -notmatch "(?im)^\s*8664 machine") { throw "Not a valid Windows x64 PE: $file" }
           }
           $exports = dumpbin /nologo /exports "build/client/package/UE4SS/Mods/ExpeditionOnline/dlls/main.dll"
-          if ($exports -notmatch "\bstart_mod\b" -or $exports -notmatch "\buninstall_mod\b") {
+          $exportsText = $exports -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $exportsText -notmatch "\bstart_mod\b" -or $exportsText -notmatch "\buninstall_mod\b") {
             throw "main.dll is not a loadable UE4SS C++ mod: lifecycle exports missing"
           }
 
