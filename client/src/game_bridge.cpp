@@ -10,7 +10,7 @@
 #include <Unreal/AActor.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
-#include <Unreal/UWorld.hpp>
+#include <Unreal/World.hpp>
 
 namespace expedition_online::client
 {
@@ -461,3 +461,4 @@ auto GameBridge::destroy_all_remotes() -> void
     remotes_.clear();
 }
 } // namespace expedition_online::client
+
