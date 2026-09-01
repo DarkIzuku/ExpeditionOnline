@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -21,7 +22,33 @@ struct Options
     std::string name{"Probe"};
     std::string zone{"ProbeZone"};
     int duration_seconds{10};
+    float x{};
+    float y{};
+    float z{};
+    float yaw{};
+    float radius{300.0F};
+    bool show_help{};
 };
+
+auto print_usage() -> void
+{
+    std::cout
+        << "ExpeditionOnlineProbe - simulated exploration client\n\n"
+        << "Usage:\n"
+        << "  ExpeditionOnlineProbe.exe [options]\n\n"
+        << "Options:\n"
+        << "  --host <address>    Server address (default: 127.0.0.1)\n"
+        << "  --port <port>       Server TCP port (default: 7777)\n"
+        << "  --name <name>       Simulated player name (default: Probe)\n"
+        << "  --zone <zone>       Exact LOCAL_ZONE value (default: ProbeZone)\n"
+        << "  --duration <sec>    Test duration in seconds (default: 10)\n"
+        << "  --x <float>         Circle center X from LOCAL_TRANSFORM (default: 0)\n"
+        << "  --y <float>         Circle center Y from LOCAL_TRANSFORM (default: 0)\n"
+        << "  --z <float>         Fixed Z from LOCAL_TRANSFORM (default: 0)\n"
+        << "  --yaw <float>       Fixed yaw in degrees (default: 0)\n"
+        << "  --radius <float>    Circular movement radius (default: 300)\n"
+        << "  --help              Show this help\n";
+}
 
 auto parse_options(int argc, char** argv) -> Options
 {
@@ -29,13 +56,35 @@ auto parse_options(int argc, char** argv) -> Options
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index];
-        if (argument == "--host" && index + 1 < argc) options.host = argv[++index];
-        else if (argument == "--port" && index + 1 < argc) options.port = static_cast<std::uint16_t>(std::stoi(argv[++index]));
-        else if (argument == "--name" && index + 1 < argc) options.name = argv[++index];
-        else if (argument == "--zone" && index + 1 < argc) options.zone = argv[++index];
-        else if (argument == "--duration" && index + 1 < argc) options.duration_seconds = std::stoi(argv[++index]);
+        const auto next_value = [&]() -> std::string {
+            if (index + 1 >= argc) throw std::runtime_error("missing value for argument: " + argument);
+            return argv[++index];
+        };
+        if (argument == "--help" || argument == "-h") options.show_help = true;
+        else if (argument == "--host") options.host = next_value();
+        else if (argument == "--port")
+        {
+            const auto port = std::stoi(next_value());
+            if (port < 1 || port > 65535) throw std::runtime_error("port must be in 1..65535");
+            options.port = static_cast<std::uint16_t>(port);
+        }
+        else if (argument == "--name") options.name = next_value();
+        else if (argument == "--zone") options.zone = next_value();
+        else if (argument == "--duration") options.duration_seconds = std::stoi(next_value());
+        else if (argument == "--x") options.x = std::stof(next_value());
+        else if (argument == "--y") options.y = std::stof(next_value());
+        else if (argument == "--z") options.z = std::stof(next_value());
+        else if (argument == "--yaw") options.yaw = std::stof(next_value());
+        else if (argument == "--radius") options.radius = std::stof(next_value());
         else throw std::runtime_error("unknown or incomplete argument: " + argument);
     }
+    if (options.duration_seconds < 1) throw std::runtime_error("duration must be at least 1 second");
+    if (!std::isfinite(options.x) || !std::isfinite(options.y) || !std::isfinite(options.z) ||
+        !std::isfinite(options.yaw) || !std::isfinite(options.radius))
+    {
+        throw std::runtime_error("position, yaw and radius must be finite numbers");
+    }
+    if (options.radius < 0.0F) throw std::runtime_error("radius must be zero or greater");
     return options;
 }
 
@@ -75,7 +124,8 @@ auto show_frame(const proto::Frame& frame) -> void
     case proto::MessageType::transform_snapshot:
     {
         const auto value = proto::decode_transform_snapshot(frame.payload);
-        std::cout << " player=" << value.player_id << " xyz=" << value.x << ',' << value.y << ',' << value.z;
+        std::cout << " player=" << value.player_id << " xyz=" << value.x << ',' << value.y << ',' << value.z
+                  << " yaw=" << value.yaw;
         break;
     }
     case proto::MessageType::player_left:
@@ -100,6 +150,11 @@ auto main(int argc, char** argv) -> int
     try
     {
         const auto options = parse_options(argc, argv);
+        if (options.show_help)
+        {
+            print_usage();
+            return 0;
+        }
         eo::net::SocketRuntime sockets;
         std::string error;
         socket = eo::net::connect_tcp(options.host, options.port, error);
@@ -119,7 +174,9 @@ auto main(int argc, char** argv) -> int
                    proto::make_frame(proto::MessageType::appearance_state,
                                      sequence++,
                                      proto::AppearanceState{0, "ProbeCharacter", "ProbeBody", "ProbeHair"}));
-        std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone << '\n';
+        std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
+                  << " base=" << options.x << ',' << options.y << ',' << options.z
+                  << " yaw=" << options.yaw << " radius=" << options.radius << '\n';
 
         proto::FrameDecoder decoder;
         std::array<std::uint8_t, 64U * 1024U> buffer{};
@@ -130,15 +187,16 @@ auto main(int argc, char** argv) -> int
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_snapshot)
             {
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-                const auto position = static_cast<float>(elapsed) / 1000.0F;
+                const auto elapsed = std::chrono::duration<float>(now - start).count();
+                const auto x = options.x + std::cos(elapsed) * options.radius;
+                const auto y = options.y + std::sin(elapsed) * options.radius;
                 const auto timestamp = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
                 send_frame(socket,
                            proto::make_frame(proto::MessageType::transform_snapshot,
                                              sequence++,
-                                             proto::TransformSnapshot{0, timestamp, position, 2.0F, 3.0F, 0.0F, position, 0.0F}));
+                                             proto::TransformSnapshot{0, timestamp, x, y, options.z, 0.0F, options.yaw, 0.0F}));
                 next_snapshot = now + std::chrono::milliseconds(250);
             }
 

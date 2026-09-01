@@ -7,8 +7,8 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 1. Abre una terminal dentro de `Server` y ejecuta `ExpeditionOnlineServer.exe`.
 2. Debe aparecer `READY TCP 0.0.0.0:7777 protocol=2`.
 3. Abre dos terminales dentro de `Probe`.
-4. En la primera ejecuta `ExpeditionOnlineProbe.exe --name ProbeA --zone SharedZone --duration 30`.
-5. En la segunda ejecuta `ExpeditionOnlineProbe.exe --name ProbeB --zone SharedZone --duration 30`.
+4. En la primera ejecuta `ExpeditionOnlineProbe.exe --name ProbeA --zone SharedZone --x 0 --y 0 --z 0 --yaw 0 --radius 300 --duration 30`.
+5. En la segunda ejecuta `ExpeditionOnlineProbe.exe --name ProbeB --zone SharedZone --x 1000 --y 1000 --z 0 --yaw 90 --radius 300 --duration 30`.
 6. Cada probe debe mostrar un `Welcome` con un ID distinto y eventos `PlayerJoined`, `ZoneState`, `AppearanceState` y `TransformSnapshot` del otro.
 7. Cierra ProbeA. ProbeB debe recibir `PlayerLeft` con el ID de ProbeA.
 
@@ -43,8 +43,21 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 5. Ejecuta `Server/ExpeditionOnlineServer.exe`.
 6. Inicia Clair Obscur, carga una partida y permanece en exploración.
 7. Comprueba que `ue4ss/UE4SS.log` no muestre un error al cargar `ExpeditionOnline/dlls/main.dll`.
-8. Ejecuta `Probe/ExpeditionOnlineProbe.exe --name Probe --zone "<zona exacta del juego>" --duration 60`.
-9. Usa en el probe exactamente el valor `LOCAL_ZONE` escrito en `ue4ss/Mods/ExpeditionOnline/ExpeditionOnline.log`.
+8. Abre `ue4ss/Mods/ExpeditionOnline/ExpeditionOnline.log` y copia:
+
+   ```text
+   LOCAL_ZONE <zona exacta completa>
+   LOCAL_TRANSFORM x=<X> y=<Y> z=<Z> yaw=<Yaw>
+   ```
+
+9. Ejecuta el probe sustituyendo los valores entre ángulos (las comillas de la zona son obligatorias):
+
+   ```powershell
+   .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --duration 60
+   ```
+
+   El probe envía snapshots cada 250 ms y recorre un círculo de radio 300 alrededor de esa posición. Usa `--radius 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
+
 10. El resultado esperado es:
 
    ```text
@@ -92,6 +105,12 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su movimi
 - Confirma `REMOTE_PLAYER_JOINED`, `ZoneState`, `AppearanceState` y `TransformSnapshot` en los logs.
 - Busca `REMOTE_SPAWN_WAIT` o `REMOTE_SPAWN_FAILED`; indican que la clase companion no está cargada o no coincide con el mapping.
 - Prueba en exploración. Durante combate `PlayerController.Pawn` puede ser `null` y esta versión elimina los remotos deliberadamente.
+
+### `LOCAL_APPEARANCE` muestra `character=Unknown`
+
+- La identidad se infiere del `SkeletalMesh` activo de `Pawn.Mesh`, no de la clase genérica `BP_jRPG_Character_World_C`.
+- El log debe incluir `outfit=SkeletalMesh /Game/...`. Si `outfit` queda vacío, conserva el log completo para identificar el nombre real del componente en esa versión del juego.
+- Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
 
 ### Protocolo incompatible
 

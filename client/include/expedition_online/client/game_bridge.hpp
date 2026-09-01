@@ -38,6 +38,7 @@ class GameBridge
         std::optional<protocol::TransformSnapshot> transform;
         RC::Unreal::AActor* actor{};
         bool appearance_dirty{};
+        bool fallback_warning_logged{};
     };
 
     auto process_incoming() -> void;
@@ -60,10 +61,15 @@ class GameBridge
     std::uint64_t local_player_id_{};
     std::string local_zone_;
     std::optional<protocol::AppearanceState> local_appearance_;
+    RC::Unreal::AActor* local_visual_pawn_{};
+    RC::Unreal::UObject* local_body_component_{};
+    RC::Unreal::UObject* local_hair_component_{};
     bool resync_requested_{};
     bool exploration_available_{};
     bool shutdown_{};
     std::chrono::steady_clock::time_point next_bridge_tick_{};
+    std::chrono::steady_clock::time_point next_appearance_capture_{};
     std::chrono::steady_clock::time_point next_snapshot_{};
+    std::chrono::steady_clock::time_point next_local_transform_log_{};
 };
 } // namespace expedition_online::client

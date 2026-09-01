@@ -8,7 +8,7 @@ La historia, las quests, el inventario y los archivos de save permanecen totalme
 
 - Protocolo binario TCP `EXON` v2, versionado y con límites de tamaño.
 - `ExpeditionOnlineServer.exe`: relay efímero solo entre jugadores de la misma zona.
-- `ExpeditionOnlineProbe.exe`: cliente de consola para probar sin abrir el juego.
+- `ExpeditionOnlineProbe.exe`: cliente de consola con posición base, yaw y movimiento circular configurables.
 - `main.dll`: cliente UE4SS nativo; se compila contra una revisión oficial fijada.
 - Unit tests e integración automática con servidor + Probe A + Probe B.
 - `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair) y `TransformSnapshot`.
@@ -23,7 +23,9 @@ En exploración, el cliente usa la arquitectura validada:
 - Controller: `BP_jRPG_Controller_World_C`.
 - Pawn local: `BP_jRPG_Character_World_C`.
 - Visual remoto: un actor nuevo `BP_Pawn_AICompanion_*_C`.
-- Apariencia: `Body.SkeletalMesh` (Character/Outfit) y `Haircut_SkeletalMesh.SkeletalMesh` (Hair).
+- Apariencia: el cuerpo se resuelve primero desde `Pawn.Mesh` (componente `Body`) y el pelo desde el componente owned `Haircut_SkeletalMesh`; ambos leen su `SkeletalMesh` activo.
+- Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
+- El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
 
 Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan tick y colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. No se reutiliza ni altera un companion real.
 

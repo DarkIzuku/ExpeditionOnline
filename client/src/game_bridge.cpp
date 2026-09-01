@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <Windows.h>
 
@@ -54,6 +56,11 @@ auto narrow(std::wstring_view value) -> std::string
 auto object_name(UObject* object) -> std::string
 {
     return object_is_valid(object) ? narrow(object->GetFullName()) : std::string{};
+}
+
+auto object_leaf_name(UObject* object) -> std::string
+{
+    return object_is_valid(object) ? narrow(object->GetName()) : std::string{};
 }
 
 auto object_property(UObject* object, const std::string& property_name) -> UObject*
@@ -110,6 +117,70 @@ auto resolve_object(const std::string& full_name) -> UObject*
     const auto path = widen(normalized_object_path(full_name));
     if (path.empty()) return nullptr;
     return UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, path.c_str());
+}
+
+auto is_skeletal_mesh_component(UObject* object) -> bool
+{
+    if (!object_is_valid(object)) return false;
+    auto* object_class = object->GetClassPrivate();
+    if (!object_is_valid(object_class)) return false;
+
+    auto* skeletal_mesh_component_class = UObjectGlobals::StaticFindObject<UClass*>(
+        nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+    if (object_is_valid(skeletal_mesh_component_class))
+    {
+        return object->IsA(skeletal_mesh_component_class);
+    }
+
+    // The reflected Engine class should always be available. Retain a name
+    // check so appearance capture still works on unusual stripped builds.
+    return object_name(object_class).find("SkeletalMeshComponent") != std::string::npos;
+}
+
+auto is_owned_by(UObject* object, UObject* expected_owner) -> bool
+{
+    if (!object_is_valid(object) || !object_is_valid(expected_owner)) return false;
+    for (auto* outer = object->GetOuterPrivate(); object_is_valid(outer); outer = outer->GetOuterPrivate())
+    {
+        if (outer == expected_owner) return true;
+    }
+    return false;
+}
+
+auto find_owned_skeletal_component(AActor* owner, const std::string& component_name) -> UObject*
+{
+    if (!object_is_valid(owner)) return nullptr;
+    std::vector<UObject*> components;
+    UObjectGlobals::FindAllOf(L"SkeletalMeshComponent", components);
+    for (auto* component : components)
+    {
+        if (is_skeletal_mesh_component(component) && is_owned_by(component, owner) &&
+            object_leaf_name(component) == component_name)
+        {
+            return component;
+        }
+    }
+    return nullptr;
+}
+
+auto infer_character_from_body_mesh(const std::string& mesh_path) -> std::string
+{
+    std::string folded = mesh_path;
+    std::transform(folded.begin(), folded.end(), folded.begin(),
+                   [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    constexpr std::pair<std::string_view, std::string_view> characters[]{
+        {"/maelle/", "Maelle"},
+        {"/lune/", "Lune"},
+        {"/sciel/", "Sciel"},
+        {"/verso/", "Verso"},
+        {"/gustave/", "Gustave"},
+        {"/monoco/", "Monoco"},
+    };
+    for (const auto& [token, character] : characters)
+    {
+        if (folded.find(token) != std::string::npos) return std::string(character);
+    }
+    return "Unknown";
 }
 } // namespace
 
@@ -190,6 +261,7 @@ auto GameBridge::process_incoming() -> void
             auto& remote = remotes_[state.player_id];
             remote.appearance = state;
             remote.appearance_dirty = true;
+            remote.fallback_warning_logged = false;
             break;
         }
         case protocol::MessageType::transform_snapshot:
@@ -219,6 +291,9 @@ auto GameBridge::update_local_player() -> void
     auto* pawn = find_local_pawn();
     if (!pawn)
     {
+        local_visual_pawn_ = nullptr;
+        local_body_component_ = nullptr;
+        local_hair_component_ = nullptr;
         if (exploration_available_)
         {
             exploration_available_ = false;
@@ -252,9 +327,16 @@ auto GameBridge::update_local_player() -> void
                                               protocol::ZoneState{local_player_id_, local_zone_}));
     }
 
-    auto appearance = capture_appearance(pawn);
-    const auto appearance_changed = !local_appearance_ || !same_appearance(*local_appearance_, appearance);
-    if (appearance_changed) local_appearance_ = appearance;
+    const auto now = std::chrono::steady_clock::now();
+    auto appearance = local_appearance_.value_or(protocol::AppearanceState{});
+    bool appearance_changed{};
+    if (!local_appearance_ || now >= next_appearance_capture_)
+    {
+        next_appearance_capture_ = now + std::chrono::seconds(1);
+        appearance = capture_appearance(pawn);
+        appearance_changed = !local_appearance_ || !same_appearance(*local_appearance_, appearance);
+        if (appearance_changed) local_appearance_ = appearance;
+    }
     if (network_.connected() && (resync_requested_ || appearance_changed))
     {
         network_.enqueue(protocol::make_frame(protocol::MessageType::appearance_state,
@@ -265,12 +347,20 @@ auto GameBridge::update_local_player() -> void
     }
     resync_requested_ = false;
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto location = pawn->K2_GetActorLocation();
+    const auto rotation = pawn->K2_GetActorRotation();
+    if (now >= next_local_transform_log_)
+    {
+        next_local_transform_log_ = now + std::chrono::seconds(2);
+        logger_.info("LOCAL_TRANSFORM x=" + std::to_string(location.X()) +
+                     " y=" + std::to_string(location.Y()) +
+                     " z=" + std::to_string(location.Z()) +
+                     " yaw=" + std::to_string(rotation.GetYaw()));
+    }
+
     if (!network_.connected() || now < next_snapshot_) return;
     next_snapshot_ = now + std::chrono::milliseconds(1000 / config_.snapshot_hz);
 
-    const auto location = pawn->K2_GetActorLocation();
-    const auto rotation = pawn->K2_GetActorRotation();
     const auto timestamp = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
@@ -318,13 +408,33 @@ auto GameBridge::current_zone(AActor* pawn) -> std::string
 
 auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
 {
+    if (local_visual_pawn_ != pawn)
+    {
+        local_visual_pawn_ = pawn;
+        local_body_component_ = nullptr;
+        local_hair_component_ = nullptr;
+    }
+
+    if (!object_is_valid(local_body_component_))
+    {
+        auto* mesh_property = object_property(pawn, "Mesh");
+        local_body_component_ = is_skeletal_mesh_component(mesh_property)
+                                    ? mesh_property
+                                    : find_owned_skeletal_component(pawn, config_.body_component_property);
+    }
+    if (!object_is_valid(local_hair_component_))
+    {
+        auto* hair_property = object_property(pawn, config_.hair_component_property);
+        local_hair_component_ = is_skeletal_mesh_component(hair_property)
+                                    ? hair_property
+                                    : find_owned_skeletal_component(pawn, config_.hair_component_property);
+    }
+
     protocol::AppearanceState appearance;
     appearance.player_id = local_player_id_;
-    appearance.character_class = object_name(pawn->GetClassPrivate());
-    auto* body_component = object_property(pawn, config_.body_component_property);
-    auto* hair_component = object_property(pawn, config_.hair_component_property);
-    appearance.outfit_mesh = object_name(object_property(body_component, config_.mesh_asset_property));
-    appearance.hair_mesh = object_name(object_property(hair_component, config_.mesh_asset_property));
+    appearance.outfit_mesh = object_name(object_property(local_body_component_, config_.mesh_asset_property));
+    appearance.hair_mesh = object_name(object_property(local_hair_component_, config_.mesh_asset_property));
+    appearance.character_class = infer_character_from_body_mesh(appearance.outfit_mesh);
     return appearance;
 }
 
@@ -338,9 +448,11 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
     if (remote.appearance)
     {
         const auto character = class_leaf(remote.appearance->character_class);
+        bool mapped{};
         if (const auto found = config_.companion_by_character.find(character); found != config_.companion_by_character.end())
         {
             class_spec = found->second;
+            mapped = true;
         }
         else
         {
@@ -352,9 +464,17 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
                 if (visual_signature.find(token) != std::string::npos)
                 {
                     class_spec = companion_class;
+                    mapped = true;
                     break;
                 }
             }
+        }
+        if (!mapped && !remote.fallback_warning_logged)
+        {
+            remote.fallback_warning_logged = true;
+            logger_.warning("REMOTE_CHARACTER_UNKNOWN player=" + std::to_string(player_id) +
+                            " character=" + character +
+                            " fallback=" + config_.default_companion_class);
         }
     }
 
@@ -466,4 +586,3 @@ auto GameBridge::destroy_all_remotes() -> void
     remotes_.clear();
 }
 } // namespace expedition_online::client
-
