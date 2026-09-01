@@ -19,13 +19,13 @@ No unverified Blueprint class is invented. When a character has no mapping, the 
 
 - Idle, Walk and Run are produced by the existing companion AnimBP from `CharacterMovement.Velocity`; no animation packets are sent.
 - Interpolation is applied every GameBridge tick. Use 100–150 ms at the normal 15 Hz snapshot rate and 300 ms for Probe at 4 Hz.
-- Jump/Fall/Land is an instrumentation experiment. Runtime proved that vertical position and `Velocity.Z` alone leave the remote in idle with `is_falling=false`. This build logs `LOCAL_MOVEMENT_STATE` only when the real local state changes, including Ground/Ascend/Apex/Descend/Land phases. It deliberately does not write numeric MovementMode values or add a MovementState packet until those local values are captured.
+- Runtime established Ground=`MovementMode 1` and airborne=`MovementMode 3`. Protocol v3 relays MovementMode/CustomMovementMode only when they change, while position interpolation remains authoritative. The Probe jump demo emits exactly `1 -> 3 -> 1`. Visual Jump/Fall/Land transitions still require validation in the game.
 
 ## Appearance and character changes
 
 The Probe accepts literal `--character`, `--outfit` and `--hair` values copied from `LOCAL_APPEARANCE`. Remote outfit and hair use only actor-bounded `K2_GetComponentsByClass` enumeration. Exact component names are `Body` and `Haircut_SkeletalMesh`.
 
-If `Body` is not owned directly by the Pawn, discovery follows only bounded relationships reachable from that Pawn: candidate visual object properties, `ChildActorComponent`, attached actors and child actors. It prefers an exact `Body` on `BP_CharacterSkin_*`. A once-per-spawn `REMOTE_SKELETAL_COMPONENT` inventory records leaf, full name and current mesh. Component or asset loading is retried with 500/1000/2000 ms backoff for at most ten attempts, then fails open without removing the remote.
+If `Body` is not owned directly by the Pawn, discovery follows only bounded relationships reachable from that Pawn: filtered visual object properties, `ChildActorComponent`, attached actors and child actors. It prefers an exact `Body` on `BP_CharacterSkin_*`. The client loads unloaded SkeletalMesh assets through UE4SS's Asset Registry route and caches successful results. A bounded inventory records components, child actors and filtered visual properties; a visual snapshot logs components that appear, disappear or change mesh. Hair is verified after application and automatically reapplied after drift. Independent Hair and Body still require the explicit A/A versus local B/B/C/C runtime test before being declared complete.
 
 Changing a verified character replaces only that remote visual actor. Player ID, zone, snapshot buffer, interpolated transform and connection are retained.
 

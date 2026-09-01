@@ -139,6 +139,22 @@ auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int {
   return 2000;
 }
 
+auto asset_resolution_source(bool cached_valid, bool already_loaded_valid,
+                             bool loaded_valid) -> AssetResolutionSource {
+  if (cached_valid)
+    return AssetResolutionSource::cache;
+  if (already_loaded_valid)
+    return AssetResolutionSource::already_loaded;
+  if (loaded_valid)
+    return AssetResolutionSource::loaded;
+  return AssetResolutionSource::failed;
+}
+
+auto appearance_asset_has_drift(const std::string &expected,
+                                const std::string &observed) -> bool {
+  return !expected.empty() && expected != observed;
+}
+
 auto appearance_apply_decision(bool body_requested, bool body_ready,
                                bool hair_requested, bool hair_ready,
                                std::size_t attempt,
@@ -177,6 +193,13 @@ auto vertical_movement_phase_name(VerticalMovementPhase phase)
     return "DESCEND";
   }
   return "UNKNOWN";
+}
+
+auto jump_demo_movement_mode(std::string_view jump_phase) -> std::uint8_t {
+  return jump_phase == "ASCEND" || jump_phase == "APEX" ||
+                 jump_phase == "DESCEND"
+             ? std::uint8_t{3}
+             : std::uint8_t{1};
 }
 
 auto score_appearance_candidate(const AppearanceCandidate &candidate) -> int {

@@ -12,3 +12,15 @@ string(FIND "${game_bridge_source}" "K2_GetComponentsByClass" bounded_scan_posit
 if(bounded_scan_position EQUAL -1)
     message(FATAL_ERROR "GameBridge must enumerate components through the owning actor")
 endif()
+
+foreach(required_marker IN ITEMS
+        "UAssetRegistryHelpers::GetAsset"
+        "REMOTE_ASSET_LOAD_FAILED"
+        "REMOTE_HAIR_DRIFT"
+        "REMOTE_VISUAL_DRIFT"
+        "SetMovementMode")
+    string(FIND "${game_bridge_source}" "${required_marker}" marker_position)
+    if(marker_position EQUAL -1)
+        message(FATAL_ERROR "GameBridge safety instrumentation is missing: ${required_marker}")
+    endif()
+endforeach()

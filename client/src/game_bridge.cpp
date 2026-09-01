@@ -17,6 +17,26 @@
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
 
+#if __has_include(<Unreal/UAssetRegistry.hpp>) &&                         \
+    __has_include(<Unreal/UAssetRegistryHelpers.hpp>) &&                  \
+    __has_include(<Unreal/UnrealVersion.hpp>)
+#define EXPEDITION_HAS_UE4SS_ASSET_LOADER 1
+#include <Unreal/UAssetRegistry.hpp>
+#include <Unreal/UAssetRegistryHelpers.hpp>
+#include <Unreal/UnrealVersion.hpp>
+#else
+#define EXPEDITION_HAS_UE4SS_ASSET_LOADER 0
+#endif
+
+#if __has_include(<Unreal/CoreUObject/UObject/Class.hpp>) &&               \
+    __has_include(<Unreal/CoreUObject/UObject/UnrealType.hpp>)
+#define EXPEDITION_HAS_UE4SS_REFLECTION 1
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#else
+#define EXPEDITION_HAS_UE4SS_REFLECTION 0
+#endif
+
 namespace expedition_online::client {
 namespace {
 using RC::Unreal::AActor;
@@ -177,6 +197,23 @@ auto call_bool_return(UObject *object, const std::string &function_name,
   return true;
 }
 
+auto call_set_movement_mode(UObject *movement_component,
+                            std::uint8_t movement_mode,
+                            std::uint8_t custom_movement_mode) -> bool {
+  if (!object_is_valid(movement_component))
+    return false;
+  auto *function = movement_component->GetFunctionByNameInChain(
+      L"SetMovementMode");
+  if (!function)
+    return false;
+  struct Params {
+    std::uint8_t NewMovementMode{};
+    std::uint8_t NewCustomMode{};
+  } params{movement_mode, custom_movement_mode};
+  movement_component->ProcessEvent(function, &params);
+  return true;
+}
+
 auto normalized_object_path(std::string full_name) -> std::string {
   const auto space = full_name.find(' ');
   if (space != std::string::npos)
@@ -198,14 +235,6 @@ auto same_appearance(const protocol::AppearanceState &left,
   return left.character_class == right.character_class &&
          left.outfit_mesh == right.outfit_mesh &&
          left.hair_mesh == right.hair_mesh;
-}
-
-auto resolve_object(const std::string &full_name) -> UObject * {
-  const auto path = widen(normalized_object_path(full_name));
-  if (path.empty())
-    return nullptr;
-  return UObjectGlobals::StaticFindObject<UObject *>(nullptr, nullptr,
-                                                     path.c_str());
 }
 
 auto is_skeletal_mesh_component(UObject *object) -> bool {
@@ -240,6 +269,70 @@ auto is_instance_of(UObject *object, const wchar_t *class_path,
   return object_is_valid(object_class) &&
          object_name(object_class).find(class_name_fallback) !=
              std::string::npos;
+}
+
+auto is_skeletal_mesh_asset(UObject *object) -> bool {
+  if (!object_is_valid(object))
+    return false;
+  auto *skeletal_mesh_class = UObjectGlobals::StaticFindObject<UClass *>(
+      nullptr, nullptr, L"/Script/Engine.SkeletalMesh");
+  if (object_is_valid(skeletal_mesh_class))
+    return object->IsA(skeletal_mesh_class);
+  const auto type = object_name(object->GetClassPrivate());
+  return type.ends_with("/Script/Engine.SkeletalMesh") ||
+         type.ends_with(".SkeletalMesh");
+}
+
+auto resolve_skeletal_mesh(
+    const std::string &full_name,
+    std::unordered_map<std::string, UObject *> &asset_cache, Logger &logger)
+    -> UObject * {
+  const auto normalized = normalized_object_path(full_name);
+  if (normalized.empty())
+    return nullptr;
+
+  if (const auto cached = asset_cache.find(normalized);
+      cached != asset_cache.end()) {
+    if (object_is_valid(cached->second) &&
+        is_skeletal_mesh_asset(cached->second)) {
+      return cached->second;
+    }
+    asset_cache.erase(cached);
+  }
+
+  const auto path = widen(normalized);
+  if (auto *found = UObjectGlobals::StaticFindObject<UObject *>(
+          nullptr, nullptr, path.c_str());
+      object_is_valid(found) && is_skeletal_mesh_asset(found)) {
+    asset_cache.emplace(normalized, found);
+    logger.info("REMOTE_ASSET_RESOLVED source=already_loaded asset=" +
+                object_name(found));
+    return found;
+  }
+
+  UObject *loaded{};
+#if EXPEDITION_HAS_UE4SS_ASSET_LOADER
+  auto *registry = static_cast<RC::Unreal::UAssetRegistry *>(
+      RC::Unreal::UAssetRegistryHelpers::GetAssetRegistry().ObjectPointer);
+  if (registry) {
+    const auto object_path =
+        RC::Unreal::FName(path.c_str(), RC::Unreal::FNAME_Add);
+    auto asset_data = registry->GetAssetByObjectPath(object_path);
+    if ((RC::Unreal::Version::IsAtMost(5, 0) &&
+         asset_data.ObjectPath().GetComparisonIndex()) ||
+        asset_data.PackageName().GetComparisonIndex()) {
+      loaded = RC::Unreal::UAssetRegistryHelpers::GetAsset(asset_data);
+    }
+  }
+#endif
+  if (object_is_valid(loaded) && is_skeletal_mesh_asset(loaded)) {
+    asset_cache.emplace(normalized, loaded);
+    logger.info("REMOTE_ASSET_RESOLVED source=loaded asset=" +
+                object_name(loaded));
+    return loaded;
+  }
+  logger.warning("REMOTE_ASSET_LOAD_FAILED asset=" + full_name);
+  return nullptr;
 }
 
 auto find_remote_movement_component(AActor *owner) -> UObject * {
@@ -460,6 +553,85 @@ struct BodySelection {
   std::vector<ReachableActor> reachable_actors;
 };
 
+auto has_visual_property_keyword(std::string name) -> bool {
+  std::transform(name.begin(), name.end(), name.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  constexpr std::string_view keywords[]{
+      "skin", "characterskin", "appearance", "outfit", "customization",
+      "visual", "body", "hair", "mesh"};
+  return std::any_of(std::begin(keywords), std::end(keywords),
+                     [&](std::string_view keyword) {
+                       return name.find(keyword) != std::string::npos;
+                     });
+}
+
+auto log_filtered_visual_properties(Logger &logger, std::string_view prefix,
+                                    std::uint64_t player_id,
+                                    UObject *owner) -> void {
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+  if (!object_is_valid(owner))
+    return;
+  std::size_t logged{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           owner->GetClassPrivate(),
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    const auto property_name = narrow(property->GetName());
+    if (!has_visual_property_keyword(property_name) ||
+        !property->IsA<RC::Unreal::FObjectProperty>()) {
+      continue;
+    }
+    auto *object_property_value =
+        *property->ContainerPtrToValuePtr<UObject *>(owner);
+    logger.info(std::string(prefix) + " player=" +
+                std::to_string(player_id) + " owner=" + object_name(owner) +
+                " property=" + property_name + " value=" +
+                (object_is_valid(object_property_value)
+                     ? object_name(object_property_value)
+                     : "nil") +
+                " class=" +
+                (object_is_valid(object_property_value)
+                     ? object_name(object_property_value->GetClassPrivate())
+                     : "nil"));
+    if (++logged >= 64)
+      break;
+  }
+#else
+  (void)logger;
+  (void)prefix;
+  (void)player_id;
+  (void)owner;
+#endif
+}
+
+auto collect_visual_mesh_snapshot(
+    const std::vector<ReachableActor> &actors)
+    -> std::unordered_map<std::string, std::string> {
+  std::unordered_map<std::string, std::string> snapshot;
+  auto *skeletal_mesh_component_class =
+      UObjectGlobals::StaticFindObject<UClass *>(
+          nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+  if (!object_is_valid(skeletal_mesh_component_class))
+    return snapshot;
+  for (const auto &reachable : actors) {
+    if (!object_is_valid(reachable.actor))
+      continue;
+    for (auto *component :
+         reachable.actor->K2_GetComponentsByClass(
+             skeletal_mesh_component_class)) {
+      if (!is_skeletal_mesh_component(component))
+        continue;
+      const auto key = object_name(reachable.actor) + "|" +
+                       object_name(component);
+      snapshot.emplace(
+          key, object_name(object_property(component, "SkeletalMesh")));
+    }
+  }
+  return snapshot;
+}
+
 auto select_body_component(AActor *pawn) -> BodySelection {
   BodySelection selection;
   if (!object_is_valid(pawn))
@@ -524,6 +696,8 @@ auto log_remote_skeletal_inventory(Logger &logger, std::uint64_t player_id,
                 " route=" + reachable.route +
                 " actor=" + object_name(reachable.actor) +
                 " class=" + object_name(reachable.actor->GetClassPrivate()));
+    log_filtered_visual_properties(logger, "REMOTE_VISUAL_PROPERTY", player_id,
+                                   reachable.actor);
     const auto &components =
         reachable.actor->K2_GetComponentsByClass(skeletal_mesh_component_class);
     for (auto *component : components) {
@@ -536,10 +710,36 @@ auto log_remote_skeletal_inventory(Logger &logger, std::uint64_t player_id,
           " mesh=" + object_name(object_property(component, "SkeletalMesh")) +
           " owner=" + object_name(reachable.actor) +
           " route=" + reachable.route);
+      log_filtered_visual_properties(logger, "REMOTE_VISUAL_PROPERTY",
+                                     player_id, component);
       if (++logged >= 64) {
         logger.warning("REMOTE_SKELETAL_COMPONENT_TRUNCATED player=" +
                        std::to_string(player_id) + " limit=64");
         return;
+      }
+    }
+
+    auto *actor_component_class = UObjectGlobals::StaticFindObject<UClass *>(
+        nullptr, nullptr, L"/Script/Engine.ActorComponent");
+    if (object_is_valid(actor_component_class)) {
+      for (auto *component : reachable.actor->K2_GetComponentsByClass(
+               actor_component_class)) {
+        if (!object_is_valid(component) ||
+            object_leaf_name(component).find("ChildActor") ==
+                std::string::npos) {
+          continue;
+        }
+        logger.info(
+            "REMOTE_CHILD_ACTOR_COMPONENT player=" +
+            std::to_string(player_id) + " component=" +
+            object_name(component) + " child_actor=" +
+            object_name(object_property(component, "ChildActor")) +
+            " child_actor_class=" +
+            object_name(object_property(component, "ChildActorClass")) +
+            " template=" +
+            object_name(object_property(component, "ChildActorTemplate")));
+        log_filtered_visual_properties(logger, "REMOTE_VISUAL_PROPERTY",
+                                       player_id, component);
       }
     }
   }
@@ -577,13 +777,34 @@ auto log_local_visual_diagnostic(Logger &logger, AActor *pawn,
           "LOCAL_COMPONENT_DIAGNOSTIC leaf=" + object_leaf_name(component) +
           " full_name=" + object_name(component) + " class=" +
           object_name(component->GetClassPrivate()) + " child_actor=" +
-          object_name(object_property(component, "ChildActor")));
+          object_name(object_property(component, "ChildActor")) +
+          " child_actor_class=" +
+          object_name(object_property(component, "ChildActorClass")) +
+          " template=" +
+          object_name(object_property(component, "ChildActorTemplate")));
+      log_filtered_visual_properties(logger, "LOCAL_VISUAL_PROPERTY", 0,
+                                     component);
       if (++logged >= 64) {
         logger.warning("LOCAL_COMPONENT_DIAGNOSTIC_TRUNCATED limit=64");
         break;
       }
     }
   }
+
+  auto *skeletal_mesh_component_class =
+      UObjectGlobals::StaticFindObject<UClass *>(
+          nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+  if (object_is_valid(skeletal_mesh_component_class)) {
+    for (auto *component :
+         pawn->K2_GetComponentsByClass(skeletal_mesh_component_class)) {
+      if (!is_skeletal_mesh_component(component))
+        continue;
+      logger.info("LOCAL_SKELETAL_DIAGNOSTIC leaf=" +
+                  object_leaf_name(component) + " mesh=" +
+                  object_name(object_property(component, "SkeletalMesh")));
+    }
+  }
+  log_filtered_visual_properties(logger, "LOCAL_VISUAL_PROPERTY", 0, pawn);
 
   for (const auto &reachable : selection.reachable_actors) {
     logger.info("LOCAL_VISUAL_ROUTE route=" + reachable.route +
@@ -691,15 +912,37 @@ auto GameBridge::process_incoming() -> void {
         remote.movement_component = nullptr;
         remote.body_component = nullptr;
         remote.hair_component = nullptr;
+        remote.expected_body_mesh = nullptr;
+        remote.expected_hair_mesh = nullptr;
         remote.body_route.clear();
         remote.hair_route.clear();
+        remote.spawned_character.clear();
+        remote.visual_mesh_snapshot.clear();
+        remote.visual_snapshot_initialized = false;
         remote.character_respawn_pending = true;
       }
       remote.appearance = state;
+      remote.expected_body_mesh = nullptr;
+      remote.expected_hair_mesh = nullptr;
       remote.appearance_dirty = true;
       remote.appearance_attempt_count = 0;
       remote.next_appearance_retry = {};
       remote.fallback_warning_logged = false;
+      break;
+    }
+    case protocol::MessageType::movement_state: {
+      const auto state = protocol::decode_movement_state(frame.payload);
+      if (state.player_id == local_player_id_)
+        break;
+      if (state.movement_mode > 6) {
+        logger_.warning("REMOTE_MOVEMENT_STATE_REJECTED player=" +
+                        std::to_string(state.player_id) + " mode=" +
+                        std::to_string(state.movement_mode));
+        break;
+      }
+      auto &remote = remotes_[state.player_id];
+      remote.movement_state = state;
+      remote.movement_state_dirty = true;
       break;
     }
     case protocol::MessageType::transform_snapshot: {
@@ -774,6 +1017,7 @@ auto GameBridge::update_local_player() -> void {
     local_movement_component_ = nullptr;
     local_visual_route_diagnostic_logged_ = false;
     local_movement_state_initialized_ = false;
+    local_movement_state_.reset();
     last_local_movement_signature_.clear();
     if (exploration_available_) {
       exploration_available_ = false;
@@ -811,6 +1055,7 @@ auto GameBridge::update_local_player() -> void {
     next_appearance_capture_ = {};
     local_movement_component_ = nullptr;
     local_movement_state_initialized_ = false;
+    local_movement_state_.reset();
     last_local_movement_signature_.clear();
   }
   bool appearance_changed{};
@@ -845,8 +1090,6 @@ auto GameBridge::update_local_player() -> void {
         " outfit=" + local_appearance_->outfit_mesh +
         " hair=" + local_appearance_->hair_mesh);
   }
-  resync_requested_ = false;
-
   const auto location = pawn->K2_GetActorLocation();
   const auto rotation = pawn->K2_GetActorRotation();
 
@@ -860,6 +1103,8 @@ auto GameBridge::update_local_player() -> void {
   }
   const auto *local_movement_mode =
       byte_property(local_movement_component_, "MovementMode");
+  const auto *local_custom_movement_mode =
+      byte_property(local_movement_component_, "CustomMovementMode");
   bool local_is_falling{};
   const auto has_local_is_falling = call_bool_return(
       local_movement_component_, "IsFalling", local_is_falling);
@@ -888,6 +1133,25 @@ auto GameBridge::update_local_player() -> void {
         std::to_string(horizontal_speed(local_velocity.X(), local_velocity.Y(),
                                         local_velocity.Z())));
   }
+  if (local_movement_mode) {
+    protocol::MovementState current_movement{
+        local_player_id_, *local_movement_mode,
+        local_custom_movement_mode ? *local_custom_movement_mode
+                                   : std::uint8_t{0}};
+    const auto movement_changed =
+        !local_movement_state_ ||
+        local_movement_state_->movement_mode !=
+            current_movement.movement_mode ||
+        local_movement_state_->custom_movement_mode !=
+            current_movement.custom_movement_mode;
+    local_movement_state_ = current_movement;
+    if (network_.connected() && (resync_requested_ || movement_changed)) {
+      network_.enqueue(protocol::make_frame(
+          protocol::MessageType::movement_state, network_.next_sequence(),
+          current_movement));
+    }
+  }
+  resync_requested_ = false;
   if (now >= next_local_transform_log_) {
     next_local_transform_log_ = now + std::chrono::seconds(2);
     logger_.info("LOCAL_TRANSFORM x=" + std::to_string(location.X()) +
@@ -928,7 +1192,10 @@ auto GameBridge::update_remote_players() -> void {
       continue;
     if (remote.appearance_dirty)
       apply_remote_appearance(player_id, remote);
+    if (remote.movement_state_dirty)
+      apply_remote_movement_state(player_id, remote);
     apply_remote_transform(player_id, remote);
+    verify_remote_visual_state(player_id, remote);
   }
 }
 
@@ -1045,6 +1312,7 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
     return nullptr;
 
   std::string class_spec = config_.default_companion_class;
+  std::string mapped_character;
   if (remote.appearance) {
     const auto character = class_leaf(remote.appearance->character_class);
     bool mapped{};
@@ -1052,6 +1320,7 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
         found != config_.companion_by_character.end()) {
       class_spec = found->second;
       mapped = true;
+      mapped_character = character;
     } else {
       const auto visual_signature = remote.appearance->character_class + ' ' +
                                     remote.appearance->outfit_mesh + ' ' +
@@ -1061,6 +1330,7 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
         if (visual_signature.find(token) != std::string::npos) {
           class_spec = companion_class;
           mapped = true;
+          mapped_character = token;
           break;
         }
       }
@@ -1111,12 +1381,18 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
   remote.movement_component = find_remote_movement_component(remote.actor);
   remote.body_component = nullptr;
   remote.hair_component = nullptr;
+  remote.expected_body_mesh = nullptr;
+  remote.expected_hair_mesh = nullptr;
   remote.body_route.clear();
   remote.hair_route.clear();
+  remote.spawned_character = mapped_character;
+  remote.visual_mesh_snapshot.clear();
+  remote.visual_snapshot_initialized = false;
   remote.movement_warning_logged = false;
   remote.skeletal_diagnostic_logged = false;
   remote.appearance_attempt_count = 0;
   remote.next_appearance_retry = {};
+  remote.next_visual_verification = {};
   auto *mesh_component = object_property(remote.actor, "Mesh");
   if (!is_skeletal_mesh_component(mesh_component)) {
     mesh_component = find_owned_skeletal_component(
@@ -1134,6 +1410,7 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
                                ? anim_instance->GetClassPrivate()
                                : nullptr));
   remote.appearance_dirty = true;
+  remote.movement_state_dirty = remote.movement_state.has_value();
   logger_.info("REMOTE_SPAWNED player=" + std::to_string(player_id) +
                " actor=" + object_name(remote.actor));
   if (remote.character_respawn_pending) {
@@ -1289,45 +1566,68 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
   bool changed{};
   const auto body_requested = !remote.appearance->outfit_mesh.empty();
   const auto hair_requested = !remote.appearance->hair_mesh.empty();
-  auto *body_mesh =
-      body_requested ? resolve_object(remote.appearance->outfit_mesh) : nullptr;
-  auto *hair_mesh =
-      hair_requested ? resolve_object(remote.appearance->hair_mesh) : nullptr;
+  auto *body_mesh = body_requested
+                        ? resolve_skeletal_mesh(remote.appearance->outfit_mesh,
+                                                asset_cache_, logger_)
+                        : nullptr;
+  auto *hair_mesh = hair_requested
+                        ? resolve_skeletal_mesh(remote.appearance->hair_mesh,
+                                                asset_cache_, logger_)
+                        : nullptr;
+  remote.expected_body_mesh = body_mesh;
+  remote.expected_hair_mesh = hair_mesh;
   auto body_ready = !body_requested;
   auto hair_ready = !hair_requested;
 
   if (body_requested && object_is_valid(body_mesh) &&
       object_is_valid(remote.body_component)) {
-    if (object_property(remote.body_component, config_.mesh_asset_property) ==
-        body_mesh) {
-      body_ready = true;
-    } else if (set_object_property(remote.body_component,
-                                   config_.mesh_asset_property, body_mesh)) {
+    if (object_property(remote.body_component, config_.mesh_asset_property) !=
+            body_mesh &&
+        set_object_property(remote.body_component, config_.mesh_asset_property,
+                            body_mesh)) {
       changed = true;
-      body_ready = true;
       call_no_args(remote.body_component, "MarkRenderStateDirty");
-      logger_.info("REMOTE_OUTFIT_APPLIED player=" + std::to_string(player_id) +
-                   " mesh=" + object_name(body_mesh));
+    }
+    auto *observed =
+        object_property(remote.body_component, config_.mesh_asset_property);
+    body_ready = observed == body_mesh;
+    if (body_ready) {
+      logger_.info("REMOTE_OUTFIT_APPLIED player=" +
+                   std::to_string(player_id) + " requested=" +
+                   object_name(body_mesh) + " observed=" +
+                   object_name(observed));
     }
   }
   if (hair_requested && object_is_valid(hair_mesh) &&
       object_is_valid(remote.hair_component)) {
-    if (object_property(remote.hair_component, config_.mesh_asset_property) ==
-        hair_mesh) {
-      hair_ready = true;
-    } else if (set_object_property(remote.hair_component,
-                                   config_.mesh_asset_property, hair_mesh)) {
+    if (object_property(remote.hair_component, config_.mesh_asset_property) !=
+            hair_mesh &&
+        set_object_property(remote.hair_component, config_.mesh_asset_property,
+                            hair_mesh)) {
       changed = true;
-      hair_ready = true;
       call_no_args(remote.hair_component, "MarkRenderStateDirty");
-      logger_.info("REMOTE_HAIR_APPLIED player=" + std::to_string(player_id) +
-                   " mesh=" + object_name(hair_mesh));
+    }
+    auto *observed =
+        object_property(remote.hair_component, config_.mesh_asset_property);
+    hair_ready = observed == hair_mesh;
+    if (hair_ready) {
+      logger_.info("REMOTE_HAIR_APPLIED player=" +
+                   std::to_string(player_id) + " requested=" +
+                   object_name(hair_mesh) + " observed=" +
+                   object_name(observed));
+      remote.hair_verification_pending = true;
     }
   }
 
   ++remote.appearance_attempt_count;
+  const auto requested_character =
+      class_leaf(remote.appearance->character_class);
+  const auto character_ready = !requested_character.empty() &&
+                               requested_character ==
+                                   remote.spawned_character;
   const auto decision = logic::appearance_apply_decision(
-      body_requested, body_ready, hair_requested, hair_ready,
+      body_requested || !character_ready, body_ready && character_ready,
+      hair_requested, hair_ready,
       remote.appearance_attempt_count);
   if (decision == logic::AppearanceApplyDecision::retry) {
     const auto delay_ms =
@@ -1356,7 +1656,9 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
                  " attempt=" + std::to_string(remote.appearance_attempt_count) +
                  " delay_ms=" + std::to_string(delay_ms) +
                  " body_ready=" + (body_ready ? "true" : "false") +
-                 " hair_ready=" + (hair_ready ? "true" : "false"));
+                 " hair_ready=" + (hair_ready ? "true" : "false") +
+                 " character_ready=" +
+                 (character_ready ? "true" : "false"));
     return;
   }
 
@@ -1366,14 +1668,149 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
         "REMOTE_APPEARANCE_FAIL_OPEN player=" + std::to_string(player_id) +
         " attempts=" + std::to_string(remote.appearance_attempt_count) +
         " body_ready=" + (body_ready ? "true" : "false") +
-        " hair_ready=" + (hair_ready ? "true" : "false"));
+        " hair_ready=" + (hair_ready ? "true" : "false") +
+        " character_ready=" +
+        (character_ready ? "true" : "false"));
   }
+  remote.visual_mesh_snapshot =
+      collect_visual_mesh_snapshot(reachable_actors);
+  remote.visual_snapshot_initialized = true;
+  remote.next_visual_verification = now + std::chrono::milliseconds(250);
   logger_.info("REMOTE_APPEARANCE_APPLIED player=" + std::to_string(player_id) +
                " changed=" + (changed ? "true" : "false") + " complete=" +
                (decision == logic::AppearanceApplyDecision::complete
                     ? "true"
                     : "false") +
                " actor=" + object_name(remote.actor));
+}
+
+auto GameBridge::apply_remote_movement_state(std::uint64_t player_id,
+                                             RemotePlayer &remote) -> void {
+  if (!object_is_valid(remote.actor) || !remote.movement_state)
+    return;
+  if (!object_is_valid(remote.movement_component))
+    remote.movement_component = find_remote_movement_component(remote.actor);
+  const auto &requested = *remote.movement_state;
+  if (!call_set_movement_mode(remote.movement_component,
+                              requested.movement_mode,
+                              requested.custom_movement_mode)) {
+    logger_.warning("REMOTE_MOVEMENT_STATE player=" +
+                    std::to_string(player_id) + " requested_mode=" +
+                    std::to_string(requested.movement_mode) +
+                    " observed_mode=unavailable is_falling=unavailable "
+                    "reason=SetMovementMode_unavailable");
+    remote.movement_state_dirty = false;
+    return;
+  }
+
+  const auto *observed_mode =
+      byte_property(remote.movement_component, "MovementMode");
+  const auto *observed_custom =
+      byte_property(remote.movement_component, "CustomMovementMode");
+  bool is_falling{};
+  const auto has_is_falling =
+      call_bool_return(remote.movement_component, "IsFalling", is_falling);
+  logger_.info(
+      "REMOTE_MOVEMENT_STATE player=" + std::to_string(player_id) +
+      " requested_mode=" + std::to_string(requested.movement_mode) +
+      " requested_custom=" +
+      std::to_string(requested.custom_movement_mode) +
+      " observed_mode=" +
+      (observed_mode ? std::to_string(*observed_mode) : "unavailable") +
+      " observed_custom=" +
+      (observed_custom ? std::to_string(*observed_custom) : "unavailable") +
+      " is_falling=" +
+      (has_is_falling ? (is_falling ? "true" : "false") : "unavailable"));
+  remote.movement_state_dirty = false;
+}
+
+auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
+                                            RemotePlayer &remote) -> void {
+  if (!object_is_valid(remote.actor))
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (now < remote.next_visual_verification)
+    return;
+  remote.next_visual_verification = now + std::chrono::milliseconds(250);
+
+  const auto reachable_actors = collect_reachable_visual_actors(remote.actor);
+  const auto current = collect_visual_mesh_snapshot(reachable_actors);
+  if (!remote.visual_snapshot_initialized) {
+    remote.visual_mesh_snapshot = current;
+    remote.visual_snapshot_initialized = true;
+  }
+
+  bool visual_drift{};
+  for (const auto &[key, new_mesh] : current) {
+    const auto old = remote.visual_mesh_snapshot.find(key);
+    if (old != remote.visual_mesh_snapshot.end() && old->second == new_mesh)
+      continue;
+    visual_drift = true;
+    const auto separator = key.find('|');
+    logger_.warning(
+        "REMOTE_VISUAL_DRIFT player=" + std::to_string(player_id) +
+        " object=" + key.substr(0, separator) + " component=" +
+        (separator == std::string::npos ? key : key.substr(separator + 1)) +
+        " old_mesh=" +
+        (old == remote.visual_mesh_snapshot.end() ? "nil" : old->second) +
+        " new_mesh=" + new_mesh);
+  }
+  for (const auto &[key, old_mesh] : remote.visual_mesh_snapshot) {
+    if (current.contains(key))
+      continue;
+    visual_drift = true;
+    const auto separator = key.find('|');
+    logger_.warning(
+        "REMOTE_VISUAL_DRIFT player=" + std::to_string(player_id) +
+        " object=" + key.substr(0, separator) + " component=" +
+        (separator == std::string::npos ? key : key.substr(separator + 1)) +
+        " old_mesh=" + old_mesh + " new_mesh=nil");
+  }
+
+  if (visual_drift)
+    log_remote_skeletal_inventory(logger_, player_id, reachable_actors);
+
+  if (object_is_valid(remote.expected_hair_mesh) &&
+      object_is_valid(remote.hair_component)) {
+    auto *observed =
+        object_property(remote.hair_component, config_.mesh_asset_property);
+    if (remote.hair_verification_pending) {
+      remote.hair_verification_pending = false;
+      logger_.info("REMOTE_HAIR_APPLIED player=" +
+                   std::to_string(player_id) + " verification=next_tick " +
+                   "requested=" + object_name(remote.expected_hair_mesh) +
+                   " observed=" + object_name(observed));
+    }
+    if (observed != remote.expected_hair_mesh) {
+      logger_.warning("REMOTE_HAIR_DRIFT player=" +
+                      std::to_string(player_id) + " expected=" +
+                      object_name(remote.expected_hair_mesh) + " observed=" +
+                      object_name(observed));
+      if (set_object_property(remote.hair_component,
+                              config_.mesh_asset_property,
+                              remote.expected_hair_mesh)) {
+        call_no_args(remote.hair_component, "MarkRenderStateDirty");
+        observed = object_property(remote.hair_component,
+                                   config_.mesh_asset_property);
+        logger_.info("REMOTE_HAIR_APPLIED player=" +
+                     std::to_string(player_id) + " requested=" +
+                     object_name(remote.expected_hair_mesh) + " observed=" +
+                     object_name(observed) + " reason=drift_reapply");
+        remote.hair_verification_pending = true;
+      }
+    }
+  }
+
+  if (object_is_valid(remote.expected_body_mesh) &&
+      object_is_valid(remote.body_component) &&
+      object_property(remote.body_component, config_.mesh_asset_property) !=
+          remote.expected_body_mesh) {
+    remote.appearance_dirty = true;
+    remote.appearance_attempt_count = 0;
+    remote.next_appearance_retry = {};
+  }
+  remote.visual_mesh_snapshot =
+      collect_visual_mesh_snapshot(reachable_actors);
 }
 
 auto GameBridge::disable_remote_ai(AActor *actor) -> void {

@@ -34,14 +34,19 @@ private:
   struct RemotePlayer {
     std::string zone;
     std::optional<protocol::AppearanceState> appearance;
+    std::optional<protocol::MovementState> movement_state;
     std::deque<protocol::TransformSnapshot> snapshots;
     std::optional<protocol::TransformSnapshot> last_rendered_transform;
     RC::Unreal::AActor *actor{};
     RC::Unreal::UObject *movement_component{};
     RC::Unreal::UObject *body_component{};
     RC::Unreal::UObject *hair_component{};
+    RC::Unreal::UObject *expected_body_mesh{};
+    RC::Unreal::UObject *expected_hair_mesh{};
     std::string body_route;
     std::string hair_route;
+    std::string spawned_character;
+    std::unordered_map<std::string, std::string> visual_mesh_snapshot;
     float velocity_x{};
     float velocity_y{};
     float velocity_z{};
@@ -51,6 +56,9 @@ private:
     bool movement_warning_logged{};
     bool character_respawn_pending{};
     bool skeletal_diagnostic_logged{};
+    bool visual_snapshot_initialized{};
+    bool movement_state_dirty{};
+    bool hair_verification_pending{};
     bool clock_offset_initialized{};
     std::size_t appearance_attempt_count{};
     double clock_offset_ms{};
@@ -58,6 +66,7 @@ private:
     std::chrono::steady_clock::time_point next_motion_log{};
     std::chrono::steady_clock::time_point next_interpolation_log{};
     std::chrono::steady_clock::time_point next_appearance_retry{};
+    std::chrono::steady_clock::time_point next_visual_verification{};
   };
 
   auto process_incoming() -> void;
@@ -73,6 +82,10 @@ private:
       -> void;
   auto apply_remote_appearance(std::uint64_t player_id, RemotePlayer &remote)
       -> void;
+  auto apply_remote_movement_state(std::uint64_t player_id,
+                                   RemotePlayer &remote) -> void;
+  auto verify_remote_visual_state(std::uint64_t player_id,
+                                  RemotePlayer &remote) -> void;
   auto disable_remote_ai(RC::Unreal::AActor *actor) -> void;
   auto destroy_remote(std::uint64_t player_id) -> void;
   auto destroy_all_remotes() -> void;
@@ -84,6 +97,7 @@ private:
   std::uint64_t local_player_id_{};
   std::string local_zone_;
   std::optional<protocol::AppearanceState> local_appearance_;
+  std::optional<protocol::MovementState> local_movement_state_;
   RC::Unreal::AActor *local_visual_pawn_{};
   RC::Unreal::UObject *local_body_component_{};
   RC::Unreal::UObject *local_hair_component_{};
@@ -95,6 +109,7 @@ private:
   bool local_visual_route_diagnostic_logged_{};
   bool local_movement_state_initialized_{};
   std::string last_local_movement_signature_;
+  std::unordered_map<std::string, RC::Unreal::UObject *> asset_cache_;
   std::size_t appearance_failure_count_{};
   bool resync_requested_{};
   bool exploration_available_{};

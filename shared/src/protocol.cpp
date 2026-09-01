@@ -13,6 +13,11 @@ namespace
 class Writer
 {
   public:
+    auto u8(std::uint8_t value) -> void
+    {
+        data_.push_back(value);
+    }
+
     auto u16(std::uint16_t value) -> void
     {
         data_.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xffU));
@@ -68,6 +73,12 @@ class Reader
 {
   public:
     explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
+
+    auto u8() -> std::uint8_t
+    {
+        require(1);
+        return bytes_[offset_++];
+    }
 
     auto u16() -> std::uint16_t
     {
@@ -222,6 +233,15 @@ auto encode(const TransformSnapshot& value) -> std::vector<std::uint8_t>
     return std::move(writer).take();
 }
 
+auto encode(const MovementState& value) -> std::vector<std::uint8_t>
+{
+    Writer writer;
+    writer.u64(value.player_id);
+    writer.u8(value.movement_mode);
+    writer.u8(value.custom_movement_mode);
+    return std::move(writer).take();
+}
+
 auto encode(const PlayerLeft& value) -> std::vector<std::uint8_t>
 {
     Writer writer;
@@ -289,6 +309,14 @@ auto decode_transform_snapshot(std::span<const std::uint8_t> bytes) -> Transform
     value.pitch = reader.f32();
     value.yaw = reader.f32();
     value.roll = reader.f32();
+    reader.finish();
+    return value;
+}
+
+auto decode_movement_state(std::span<const std::uint8_t> bytes) -> MovementState
+{
+    Reader reader(bytes);
+    MovementState value{reader.u64(), reader.u8(), reader.u8()};
     reader.finish();
     return value;
 }
@@ -392,6 +420,7 @@ auto message_type_name(MessageType type) -> const char*
     case MessageType::ping: return "Ping";
     case MessageType::pong: return "Pong";
     case MessageType::player_joined: return "PlayerJoined";
+    case MessageType::movement_state: return "MovementState";
     default: return "Unknown";
     }
 }
@@ -410,6 +439,7 @@ auto is_known_message_type(MessageType type) noexcept -> bool
     case MessageType::ping:
     case MessageType::pong:
     case MessageType::player_joined: return true;
+    case MessageType::movement_state: return true;
     default: return false;
     }
 }

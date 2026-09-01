@@ -45,6 +45,10 @@ try {
     foreach ($phase in @("GROUND", "ASCEND", "APEX", "DESCEND", "LAND")) {
         if ($jumpText -notmatch "jump=$phase") { throw "Jump demo is missing $phase" }
     }
+    $movementModes = [regex]::Matches($jumpText, 'DEMO_MOVEMENT_STATE mode=(\d+)') | ForEach-Object { $_.Groups[1].Value }
+    if (($movementModes -join ',') -ne '1,3,1') {
+        throw "Jump demo MovementState transition must be exactly 1,3,1; got $($movementModes -join ',')"
+    }
     Write-Host "PASS: Probe generated Idle, Walk, Run, Stop, Jump, Apex, Fall and Land phases without animation packets."
 }
 finally {

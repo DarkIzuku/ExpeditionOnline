@@ -83,6 +83,8 @@ try {
         @{ Text = $b; Pattern = "RECV AppearanceState[^`r`n]*player=$idA[^`r`n]*character=Maelle[^`r`n]*outfit=$([regex]::Escape($testOutfit))[^`r`n]*hair=$([regex]::Escape($testHair))"; Name = "Probe B literal AppearanceState" },
         @{ Text = $a; Pattern = "RECV TransformSnapshot[^`r`n]*player=$idB"; Name = "Probe A TransformSnapshot" },
         @{ Text = $b; Pattern = "RECV TransformSnapshot[^`r`n]*player=$idA"; Name = "Probe B TransformSnapshot" },
+        @{ Text = $a; Pattern = "RECV MovementState[^`r`n]*player=$idB[^`r`n]*movement_mode=1"; Name = "Probe A MovementState" },
+        @{ Text = $b; Pattern = "RECV MovementState[^`r`n]*player=$idA[^`r`n]*movement_mode=1"; Name = "Probe B late-join MovementState" },
         @{ Text = $b; Pattern = "RECV PlayerLeft[^`r`n]*player=$idA"; Name = "Probe B PlayerLeft" }
     )
     foreach ($check in $checks) {

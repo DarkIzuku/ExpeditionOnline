@@ -1,4 +1,5 @@
 #include <expedition_online/build_info.hpp>
+#include <expedition_online/client_logic.hpp>
 #include <expedition_online/protocol.hpp>
 #include <expedition_online/socket.hpp>
 
@@ -13,6 +14,7 @@
 
 namespace eo = expedition_online;
 namespace proto = expedition_online::protocol;
+namespace logic = expedition_online::client_logic;
 
 namespace {
 struct Options {
@@ -244,6 +246,14 @@ auto show_frame(const proto::Frame &frame) -> void {
               << value.y << ',' << value.z << " yaw=" << value.yaw;
     break;
   }
+  case proto::MessageType::movement_state: {
+    const auto value = proto::decode_movement_state(frame.payload);
+    std::cout << " player=" << value.player_id
+              << " movement_mode=" << static_cast<int>(value.movement_mode)
+              << " custom_movement_mode="
+              << static_cast<int>(value.custom_movement_mode);
+    break;
+  }
   case proto::MessageType::player_left:
     std::cout << " player="
               << proto::decode_player_left(frame.payload).player_id;
@@ -290,6 +300,11 @@ auto main(int argc, char **argv) -> int {
                    proto::MessageType::appearance_state, sequence++,
                    proto::AppearanceState{0, options.character, options.outfit,
                                           options.hair}));
+    send_frame(socket,
+               proto::make_frame(proto::MessageType::movement_state,
+                                 sequence++, proto::MovementState{0, 1, 0}));
+    if (options.jump_demo)
+      std::cout << "DEMO_MOVEMENT_STATE mode=1 custom=0\n";
     std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
               << " character=" << options.character
               << " outfit=" << options.outfit << " hair=" << options.hair
@@ -307,6 +322,7 @@ auto main(int argc, char **argv) -> int {
     auto next_snapshot = start;
     std::string last_movement_phase;
     std::string last_jump_phase;
+    std::uint8_t last_movement_mode{1};
     while (std::chrono::steady_clock::now() - start <
            std::chrono::seconds(options.duration_seconds)) {
       const auto now = std::chrono::steady_clock::now();
@@ -320,6 +336,18 @@ auto main(int argc, char **argv) -> int {
                     << " velocityZ=" << demo.velocity_z << '\n';
           last_movement_phase = demo.movement_phase;
           last_jump_phase = demo.jump_phase;
+        }
+        const auto movement_mode =
+            logic::jump_demo_movement_mode(demo.jump_phase);
+        if (movement_mode != last_movement_mode) {
+          send_frame(socket,
+                     proto::make_frame(proto::MessageType::movement_state,
+                                       sequence++,
+                                       proto::MovementState{0, movement_mode,
+                                                            0}));
+          std::cout << "DEMO_MOVEMENT_STATE mode="
+                    << static_cast<int>(movement_mode) << " custom=0\n";
+          last_movement_mode = movement_mode;
         }
         const auto timestamp = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -65,6 +65,7 @@ auto player_id_of(const proto::Frame& frame) -> std::optional<std::uint64_t>
     case proto::MessageType::zone_state: return proto::decode_zone_state(frame.payload).player_id;
     case proto::MessageType::appearance_state: return proto::decode_appearance_state(frame.payload).player_id;
     case proto::MessageType::transform_snapshot: return proto::decode_transform_snapshot(frame.payload).player_id;
+    case proto::MessageType::movement_state: return proto::decode_movement_state(frame.payload).player_id;
     case proto::MessageType::player_joined: return proto::decode_player_joined(frame.payload).player_id;
     case proto::MessageType::player_left: return proto::decode_player_left(frame.payload).player_id;
     default: return std::nullopt;
@@ -225,11 +226,19 @@ auto verify_malformed_isolation(const Options& options, TestClient& observer) ->
 
     TestClient wrong_protocol(options.host, options.port, "SelfTest-WrongProtocol");
     wrong_protocol.connect_and_hello();
-    wrong_protocol.send(proto::Frame{static_cast<std::uint16_t>(proto::kProtocolVersion + 1),
+    wrong_protocol.send(proto::Frame{static_cast<std::uint16_t>(proto::kProtocolVersion - 1),
                                      proto::MessageType::ping,
                                      600,
                                      {}});
     (void)wrong_protocol.wait_for(proto::MessageType::error, std::nullopt, std::chrono::seconds(2));
+
+    TestClient invalid_movement(options.host, options.port, "SelfTest-InvalidMovement");
+    invalid_movement.connect_and_hello();
+    invalid_movement.send_message(proto::MessageType::movement_state,
+                                  proto::MovementState{999, 255, 0});
+    (void)invalid_movement.wait_for(proto::MessageType::error,
+                                    std::nullopt,
+                                    std::chrono::seconds(2));
 
     observer.send_empty(proto::MessageType::ping);
     (void)observer.wait_for(proto::MessageType::pong, std::nullopt, std::chrono::seconds(2));
@@ -244,6 +253,8 @@ auto run_self_test(const Options& options) -> void
                        proto::AppearanceState{999, "Maelle", "OutfitA", "HairA"});
     alice.send_message(proto::MessageType::transform_snapshot,
                        proto::TransformSnapshot{999, 1000, 100.0F, 200.0F, 300.0F, 0.0F, 45.0F, 0.0F});
+    alice.send_message(proto::MessageType::movement_state,
+                       proto::MovementState{999, 3, 0});
 
     TestClient bob(options.host, options.port, "SelfTest-B");
     bob.connect_and_hello();
@@ -251,16 +262,22 @@ auto run_self_test(const Options& options) -> void
                      proto::AppearanceState{888, "Sciel", "OutfitB", "HairB"});
     bob.send_message(proto::MessageType::transform_snapshot,
                      proto::TransformSnapshot{888, 1100, 400.0F, 500.0F, 600.0F, 0.0F, 90.0F, 0.0F});
+    bob.send_message(proto::MessageType::movement_state,
+                     proto::MovementState{888, 1, 0});
     bob.send_message(proto::MessageType::zone_state, proto::ZoneState{888, "ZoneA"});
 
     (void)bob.wait_for(proto::MessageType::player_joined, alice.id(), std::chrono::seconds(3));
     (void)bob.wait_for(proto::MessageType::zone_state, alice.id(), std::chrono::seconds(3));
     (void)bob.wait_for(proto::MessageType::appearance_state, alice.id(), std::chrono::seconds(3));
     (void)bob.wait_for(proto::MessageType::transform_snapshot, alice.id(), std::chrono::seconds(3));
+    const auto late_movement = bob.wait_for(proto::MessageType::movement_state, alice.id(), std::chrono::seconds(3));
+    if (proto::decode_movement_state(late_movement.payload).movement_mode != 3)
+        throw std::runtime_error("late join MovementState was not retained");
     (void)alice.wait_for(proto::MessageType::player_joined, bob.id(), std::chrono::seconds(3));
     (void)alice.wait_for(proto::MessageType::zone_state, bob.id(), std::chrono::seconds(3));
     (void)alice.wait_for(proto::MessageType::appearance_state, bob.id(), std::chrono::seconds(3));
     (void)alice.wait_for(proto::MessageType::transform_snapshot, bob.id(), std::chrono::seconds(3));
+    (void)alice.wait_for(proto::MessageType::movement_state, bob.id(), std::chrono::seconds(3));
 
     bob.send_message(proto::MessageType::zone_state, proto::ZoneState{bob.id(), "ZoneB"});
     (void)alice.wait_for(proto::MessageType::player_left, bob.id(), std::chrono::seconds(3));
@@ -279,6 +296,8 @@ auto run_self_test(const Options& options) -> void
                              proto::AppearanceState{old_alice_id, "Maelle", "OutfitA2", "HairA2"});
     reconnected.send_message(proto::MessageType::transform_snapshot,
                              proto::TransformSnapshot{old_alice_id, 2000, 700.0F, 800.0F, 900.0F, 0.0F, 0.0F, 0.0F});
+    reconnected.send_message(proto::MessageType::movement_state,
+                             proto::MovementState{old_alice_id, 1, 0});
     reconnected.send_message(proto::MessageType::zone_state,
                              proto::ZoneState{old_alice_id, "ZoneA"});
     (void)bob.wait_for(proto::MessageType::player_joined, reconnected.id(), std::chrono::seconds(3));

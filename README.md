@@ -1,6 +1,6 @@
 # ExpeditionOnline
 
-Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.3.0-rc2` instrumentation release candidate focuses on easy installation, smooth same-zone movement, explicit appearance tests, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
+Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.4.0-rc1` instrumentation release candidate focuses on easy installation, smooth same-zone movement, explicit appearance tests, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
 
 Normal users should start with [client quick start](docs/QUICK_START_CLIENT.md) or [host quick start](docs/QUICK_START_HOST.md). Technical scope, verified companions and remaining limitations are in [Exploration RC](docs/EXPLORATION_RC.md).
 
@@ -10,12 +10,12 @@ La historia, las quests, el inventario y los archivos de save permanecen totalme
 
 ## Estado
 
-- Protocolo binario TCP `EXON` v2, versionado y con límites de tamaño.
+- Protocolo binario TCP `EXON` v3, versionado y con límites de tamaño.
 - `ExpeditionOnlineServer.exe`: relay efímero solo entre jugadores de la misma zona.
 - `ExpeditionOnlineProbe.exe`: cliente de consola con posición base, yaw y movimiento circular configurables.
 - `main.dll`: cliente UE4SS nativo; se compila contra una revisión oficial fijada.
 - Unit tests e integración automática con servidor + Probe A + Probe B.
-- `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair) y `TransformSnapshot`.
+- `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair), `TransformSnapshot` y `MovementState`.
 - TCP-only en este MVP; `TransformSnapshot` queda separado para una futura ruta UDP.
 
 ## Funcionamiento
@@ -30,7 +30,7 @@ En exploración, el cliente usa la arquitectura validada:
 - Apariencia: el cuerpo se obtiene exclusivamente de los componentes del Pawn mediante `K2_GetComponentsByClass`, buscando un `SkeletalMeshComponent` exacto `Body`; no se realizan scans globales de UObjects. Se ignora `Pawn.Mesh`/`CharacterMesh0` porque contiene `SKM_Quinn`, y se conserva la última apariencia válida mientras el Body no esté listo. El pelo se lee de `Haircut_SkeletalMesh`.
 - Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
 - El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
-- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto; no se envían paquetes de animación.
+- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto. `MovementState` replica solo MovementMode/CustomMovementMode cuando cambian para permitir probar Jump/Fall/Land; no se envían nombres, montages ni frames de animación.
 
 Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan el tick del AIController y la colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. El actor, su SkeletalMesh, AnimBP y CharacterMovement siguen actualizándose. No se reutiliza ni altera un companion real.
 

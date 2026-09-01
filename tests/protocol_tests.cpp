@@ -54,6 +54,16 @@ auto test_payloads() -> void {
   check(std::fabs(decoded_transform.x - transform.x) < 0.0001F, "Transform x");
   check(std::fabs(decoded_transform.yaw - transform.yaw) < 0.0001F,
         "Transform yaw");
+
+  const proto::MovementState movement{91, 3, 7};
+  const auto decoded_movement =
+      proto::decode_movement_state(proto::encode(movement));
+  check(decoded_movement.player_id == movement.player_id,
+        "MovementState player_id");
+  check(decoded_movement.movement_mode == 3,
+        "MovementState movement_mode");
+  check(decoded_movement.custom_movement_mode == 7,
+        "MovementState custom_movement_mode");
 }
 
 auto test_fragmented_frames() -> void {
@@ -91,6 +101,7 @@ auto test_rejections() -> void {
         "Ping empty payload helper");
   check(!proto::is_empty_payload_message(proto::MessageType::hello),
         "Hello is not empty payload");
+  check(proto::kProtocolVersion == 3, "protocol v3 capability boundary");
 
   bool rejected{};
   try {
@@ -247,6 +258,29 @@ auto test_local_movement_state_classification() -> void {
             logic::vertical_movement_phase_name(Phase::apex) == "APEX" &&
             logic::vertical_movement_phase_name(Phase::descend) == "DESCEND",
         "movement phase log names");
+  check(logic::jump_demo_movement_mode("GROUND") == 1 &&
+            logic::jump_demo_movement_mode("ASCEND") == 3 &&
+            logic::jump_demo_movement_mode("APEX") == 3 &&
+            logic::jump_demo_movement_mode("DESCEND") == 3 &&
+            logic::jump_demo_movement_mode("LAND") == 1,
+        "Probe jump transitions are 1->3->1");
+}
+
+auto test_remote_asset_safety() -> void {
+  using Source = logic::AssetResolutionSource;
+  check(logic::asset_resolution_source(true, false, false) == Source::cache,
+        "valid asset cache wins");
+  check(logic::asset_resolution_source(false, true, false) ==
+            Source::already_loaded,
+        "StaticFindObject result wins before loader");
+  check(logic::asset_resolution_source(false, false, true) == Source::loaded,
+        "asset loader fallback is selected");
+  check(logic::asset_resolution_source(false, false, false) == Source::failed,
+        "failed asset lookup remains fail-open");
+  check(logic::appearance_asset_has_drift("HairA", "HairB"),
+        "hair drift requests reapply");
+  check(!logic::appearance_asset_has_drift("HairA", "HairA"),
+        "matching hair does not reapply");
 }
 } // namespace
 
@@ -258,6 +292,7 @@ auto main() -> int {
     test_snapshot_interpolation();
     test_appearance_selection();
     test_local_movement_state_classification();
+    test_remote_asset_safety();
     std::cout << "All protocol tests passed\n";
     return 0;
   } catch (const std::exception &exception) {

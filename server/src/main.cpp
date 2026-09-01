@@ -139,6 +139,7 @@ struct Session
     std::string zone;
     std::optional<proto::AppearanceState> appearance;
     std::optional<proto::TransformSnapshot> transform;
+    std::optional<proto::MovementState> movement;
     std::atomic_bool alive{true};
     std::atomic_bool greeted{};
     std::atomic_bool removed{};
@@ -328,6 +329,9 @@ class Server
         case proto::MessageType::transform_snapshot:
             handle_transform(session, proto::decode_transform_snapshot(frame.payload), frame.sequence);
             break;
+        case proto::MessageType::movement_state:
+            handle_movement(session, proto::decode_movement_state(frame.payload), frame.sequence);
+            break;
         case proto::MessageType::ping:
             send(session, proto::Frame{proto::kProtocolVersion, proto::MessageType::pong, frame.sequence, {}});
             break;
@@ -387,6 +391,11 @@ class Server
                                           proto::make_frame(proto::MessageType::transform_snapshot,
                                                             next_server_sequence_++,
                                                             *peer->transform)});
+                if (peer->movement)
+                    deliveries.push_back({session,
+                                          proto::make_frame(proto::MessageType::movement_state,
+                                                            next_server_sequence_++,
+                                                            *peer->movement)});
                 if (session->appearance)
                     deliveries.push_back({peer,
                                           proto::make_frame(proto::MessageType::appearance_state,
@@ -397,6 +406,11 @@ class Server
                                           proto::make_frame(proto::MessageType::transform_snapshot,
                                                             next_server_sequence_++,
                                                             *session->transform)});
+                if (session->movement)
+                    deliveries.push_back({peer,
+                                          proto::make_frame(proto::MessageType::movement_state,
+                                                            next_server_sequence_++,
+                                                            *session->movement)});
             }
         }
         deliver(deliveries);
@@ -443,6 +457,31 @@ class Server
                                        session->zone,
                                        session->id,
                                        proto::make_frame(proto::MessageType::transform_snapshot, sequence, state));
+        }
+        deliver(deliveries);
+    }
+
+    auto handle_movement(const std::shared_ptr<Session>& session,
+                         proto::MovementState state,
+                         std::uint64_t sequence) -> void
+    {
+        // UE CharacterMovement's network-safe modes are None through Custom.
+        // MOVE_MAX and arbitrary bytes are never forwarded into the game.
+        if (state.movement_mode > 6)
+        {
+            send_error(session, 1004, "invalid MovementMode");
+            throw proto::ProtocolError("invalid MovementMode");
+        }
+        state.player_id = session->id;
+        std::vector<Delivery> deliveries;
+        {
+            std::lock_guard lock(state_mutex_);
+            session->movement = state;
+            if (!session->zone.empty())
+                append_zone_deliveries(deliveries,
+                                       session->zone,
+                                       session->id,
+                                       proto::make_frame(proto::MessageType::movement_state, sequence, state));
         }
         deliver(deliveries);
     }

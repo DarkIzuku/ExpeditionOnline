@@ -39,6 +39,18 @@ auto select_effective_appearance(
     -> std::optional<protocol::AppearanceState>;
 auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int;
 
+enum class AssetResolutionSource {
+  cache,
+  already_loaded,
+  loaded,
+  failed,
+};
+
+auto asset_resolution_source(bool cached_valid, bool already_loaded_valid,
+                             bool loaded_valid) -> AssetResolutionSource;
+auto appearance_asset_has_drift(const std::string &expected,
+                                const std::string &observed) -> bool;
+
 enum class AppearanceApplyDecision {
   complete,
   retry,
@@ -63,6 +75,7 @@ auto classify_vertical_movement(bool is_falling, float velocity_z,
     -> VerticalMovementPhase;
 auto vertical_movement_phase_name(VerticalMovementPhase phase)
     -> std::string_view;
+auto jump_demo_movement_mode(std::string_view jump_phase) -> std::uint8_t;
 
 struct AppearanceCandidate {
   std::string component_leaf;

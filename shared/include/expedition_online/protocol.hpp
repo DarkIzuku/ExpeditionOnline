@@ -11,7 +11,7 @@
 namespace expedition_online::protocol
 {
 inline constexpr std::array<std::uint8_t, 4> kMagic{'E', 'X', 'O', 'N'};
-inline constexpr std::uint16_t kProtocolVersion = 2;
+inline constexpr std::uint16_t kProtocolVersion = 3;
 inline constexpr std::size_t kHeaderSize = 20;
 inline constexpr std::uint32_t kMaxPayloadSize = 1024U * 1024U;
 inline constexpr std::size_t kMaxStringSize = 16U * 1024U;
@@ -28,6 +28,7 @@ enum class MessageType : std::uint16_t
     ping = 8,
     pong = 9,
     player_joined = 10,
+    movement_state = 11,
 };
 
 struct Hello
@@ -73,6 +74,13 @@ struct TransformSnapshot
     float roll{};
 };
 
+struct MovementState
+{
+    std::uint64_t player_id{};
+    std::uint8_t movement_mode{};
+    std::uint8_t custom_movement_mode{};
+};
+
 struct PlayerLeft
 {
     std::uint64_t player_id{};
@@ -104,6 +112,7 @@ auto encode(const ZoneState& value) -> std::vector<std::uint8_t>;
 auto encode(const AppearanceState& value) -> std::vector<std::uint8_t>;
 auto encode(const PlayerJoined& value) -> std::vector<std::uint8_t>;
 auto encode(const TransformSnapshot& value) -> std::vector<std::uint8_t>;
+auto encode(const MovementState& value) -> std::vector<std::uint8_t>;
 auto encode(const PlayerLeft& value) -> std::vector<std::uint8_t>;
 auto encode(const ErrorMessage& value) -> std::vector<std::uint8_t>;
 
@@ -113,6 +122,7 @@ auto decode_zone_state(std::span<const std::uint8_t> bytes) -> ZoneState;
 auto decode_appearance_state(std::span<const std::uint8_t> bytes) -> AppearanceState;
 auto decode_player_joined(std::span<const std::uint8_t> bytes) -> PlayerJoined;
 auto decode_transform_snapshot(std::span<const std::uint8_t> bytes) -> TransformSnapshot;
+auto decode_movement_state(std::span<const std::uint8_t> bytes) -> MovementState;
 auto decode_player_left(std::span<const std::uint8_t> bytes) -> PlayerLeft;
 auto decode_error(std::span<const std::uint8_t> bytes) -> ErrorMessage;
 
