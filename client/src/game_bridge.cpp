@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -71,6 +73,20 @@ auto object_property(UObject* object, const std::string& property_name) -> UObje
     return value != nullptr && object_is_valid(*value) ? *value : nullptr;
 }
 
+auto vector_property(UObject* object, const std::string& property_name) -> FVector*
+{
+    if (!object_is_valid(object)) return nullptr;
+    const auto wide_name = widen(property_name);
+    return object->GetValuePtrByPropertyNameInChain<FVector>(wide_name.c_str());
+}
+
+auto byte_property(UObject* object, const std::string& property_name) -> std::uint8_t*
+{
+    if (!object_is_valid(object)) return nullptr;
+    const auto wide_name = widen(property_name);
+    return object->GetValuePtrByPropertyNameInChain<std::uint8_t>(wide_name.c_str());
+}
+
 auto set_object_property(UObject* object, const std::string& property_name, UObject* value) -> bool
 {
     if (!object_is_valid(object) || !object_is_valid(value)) return false;
@@ -88,6 +104,35 @@ auto call_no_args(UObject* object, const std::string& function_name) -> bool
     auto* function = object->GetFunctionByNameInChain(wide_name.c_str());
     if (!function) return false;
     object->ProcessEvent(function, nullptr);
+    return true;
+}
+
+auto call_object_return(UObject* object, const std::string& function_name) -> UObject*
+{
+    if (!object_is_valid(object)) return nullptr;
+    const auto wide_name = widen(function_name);
+    auto* function = object->GetFunctionByNameInChain(wide_name.c_str());
+    if (!function) return nullptr;
+    struct Params
+    {
+        UObject* ReturnValue{};
+    } params;
+    object->ProcessEvent(function, &params);
+    return object_is_valid(params.ReturnValue) ? params.ReturnValue : nullptr;
+}
+
+auto call_vector_return(UObject* object, const std::string& function_name, FVector& result) -> bool
+{
+    if (!object_is_valid(object)) return false;
+    const auto wide_name = widen(function_name);
+    auto* function = object->GetFunctionByNameInChain(wide_name.c_str());
+    if (!function) return false;
+    struct Params
+    {
+        FVector ReturnValue{};
+    } params;
+    object->ProcessEvent(function, &params);
+    result = params.ReturnValue;
     return true;
 }
 
@@ -137,14 +182,51 @@ auto is_skeletal_mesh_component(UObject* object) -> bool
     return object_name(object_class).find("SkeletalMeshComponent") != std::string::npos;
 }
 
+auto is_instance_of(UObject* object, const wchar_t* class_path, std::string_view class_name_fallback) -> bool
+{
+    if (!object_is_valid(object)) return false;
+    auto* expected_class = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, class_path);
+    if (object_is_valid(expected_class)) return object->IsA(expected_class);
+    auto* object_class = object->GetClassPrivate();
+    return object_is_valid(object_class) && object_name(object_class).find(class_name_fallback) != std::string::npos;
+}
+
 auto is_owned_by(UObject* object, UObject* expected_owner) -> bool
 {
     if (!object_is_valid(object) || !object_is_valid(expected_owner)) return false;
+    if (auto* reported_owner = call_object_return(object, "GetOwner")) return reported_owner == expected_owner;
     for (auto* outer = object->GetOuterPrivate(); object_is_valid(outer); outer = outer->GetOuterPrivate())
     {
         if (outer == expected_owner) return true;
     }
     return false;
+}
+
+auto find_remote_movement_component(AActor* owner) -> UObject*
+{
+    if (!object_is_valid(owner)) return nullptr;
+    auto* component = object_property(owner, "CharacterMovement");
+    if (is_instance_of(component, L"/Script/Engine.CharacterMovementComponent", "CharacterMovementComponent")) return component;
+
+    component = object_property(owner, "MovementComponent");
+    if (is_instance_of(component, L"/Script/Engine.MovementComponent", "MovementComponent")) return component;
+
+    std::vector<UObject*> components;
+    UObjectGlobals::FindAllOf(L"CharacterMovementComponent", components);
+    for (auto* candidate : components)
+    {
+        if (is_owned_by(candidate, owner) &&
+            is_instance_of(candidate, L"/Script/Engine.CharacterMovementComponent", "CharacterMovementComponent"))
+        {
+            return candidate;
+        }
+    }
+    return nullptr;
+}
+
+auto horizontal_speed(float x, float y, float z) -> float
+{
+    return std::sqrt(x * x + y * y + z * z);
 }
 
 auto find_owned_skeletal_component(AActor* owner, const std::string& component_name) -> UObject*
@@ -268,7 +350,32 @@ auto GameBridge::process_incoming() -> void
         {
             const auto state = protocol::decode_transform_snapshot(frame.payload);
             if (state.player_id == local_player_id_) break;
-            remotes_[state.player_id].transform = state;
+            auto& remote = remotes_[state.player_id];
+            remote.previous_transform = remote.transform;
+            remote.transform = state;
+            remote.last_transform_received = std::chrono::steady_clock::now();
+            remote.velocity_x = 0.0F;
+            remote.velocity_y = 0.0F;
+            remote.velocity_z = 0.0F;
+            remote.speed = 0.0F;
+            if (remote.previous_transform && state.timestamp_ms > remote.previous_transform->timestamp_ms)
+            {
+                const auto delta_seconds = static_cast<float>(state.timestamp_ms - remote.previous_transform->timestamp_ms) / 1000.0F;
+                if (delta_seconds > 0.0F && delta_seconds <= 2.0F)
+                {
+                    remote.velocity_x = (state.x - remote.previous_transform->x) / delta_seconds;
+                    remote.velocity_y = (state.y - remote.previous_transform->y) / delta_seconds;
+                    remote.velocity_z = (state.z - remote.previous_transform->z) / delta_seconds;
+                    remote.speed = horizontal_speed(remote.velocity_x, remote.velocity_y, remote.velocity_z);
+                    if (remote.speed < 1.0F)
+                    {
+                        remote.velocity_x = 0.0F;
+                        remote.velocity_y = 0.0F;
+                        remote.velocity_z = 0.0F;
+                        remote.speed = 0.0F;
+                    }
+                }
+            }
             break;
         }
         case protocol::MessageType::player_left:
@@ -386,7 +493,7 @@ auto GameBridge::update_remote_players() -> void
         if (remote.zone != local_zone_ || !remote.transform) continue;
         if (!ensure_remote_actor(player_id, remote)) continue;
         if (remote.appearance_dirty) apply_remote_appearance(remote);
-        apply_remote_transform(remote);
+        apply_remote_transform(player_id, remote);
     }
 }
 
@@ -413,14 +520,16 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
         local_visual_pawn_ = pawn;
         local_body_component_ = nullptr;
         local_hair_component_ = nullptr;
+        last_body_component_log_.clear();
+        last_body_mesh_log_.clear();
+        body_diagnostic_initialized_ = false;
     }
 
     if (!object_is_valid(local_body_component_))
     {
-        auto* mesh_property = object_property(pawn, "Mesh");
-        local_body_component_ = is_skeletal_mesh_component(mesh_property)
-                                    ? mesh_property
-                                    : find_owned_skeletal_component(pawn, config_.body_component_property);
+        // Pawn.Mesh is CharacterMesh0/SKM_Quinn in Expedition 33. Appearance
+        // must come exclusively from the owned component whose leaf is Body.
+        local_body_component_ = find_owned_skeletal_component(pawn, config_.body_component_property);
     }
     if (!object_is_valid(local_hair_component_))
     {
@@ -432,9 +541,24 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
 
     protocol::AppearanceState appearance;
     appearance.player_id = local_player_id_;
-    appearance.outfit_mesh = object_name(object_property(local_body_component_, config_.mesh_asset_property));
+    auto* body_mesh = object_property(local_body_component_, config_.mesh_asset_property);
+    appearance.outfit_mesh = object_name(body_mesh);
     appearance.hair_mesh = object_name(object_property(local_hair_component_, config_.mesh_asset_property));
     appearance.character_class = infer_character_from_body_mesh(appearance.outfit_mesh);
+
+    const auto body_component_log = object_is_valid(local_body_component_) ? object_name(local_body_component_) : "nil";
+    const auto body_mesh_log = object_is_valid(body_mesh) ? object_name(body_mesh) : "nil";
+    if (!body_diagnostic_initialized_ || body_component_log != last_body_component_log_)
+    {
+        logger_.info("APPEARANCE_BODY_COMPONENT component=" + body_component_log);
+        last_body_component_log_ = body_component_log;
+    }
+    if (!body_diagnostic_initialized_ || body_mesh_log != last_body_mesh_log_)
+    {
+        logger_.info("APPEARANCE_BODY_MESH mesh=" + body_mesh_log);
+        last_body_mesh_log_ = body_mesh_log;
+    }
+    body_diagnostic_initialized_ = true;
     return appearance;
 }
 
@@ -512,12 +636,28 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
     }
 
     disable_remote_ai(remote.actor);
+    remote.movement_component = find_remote_movement_component(remote.actor);
+    remote.movement_warning_logged = false;
+    auto* mesh_component = object_property(remote.actor, "Mesh");
+    if (!is_skeletal_mesh_component(mesh_component))
+    {
+        mesh_component = find_owned_skeletal_component(remote.actor, config_.body_component_property);
+    }
+    auto* anim_instance = call_object_return(mesh_component, "GetAnimInstance");
+    logger_.info("REMOTE_MOTION_SETUP player=" + std::to_string(player_id) +
+                 " movement_component=" + object_name(remote.movement_component) +
+                 " movement_class=" + object_name(object_is_valid(remote.movement_component)
+                                                        ? remote.movement_component->GetClassPrivate()
+                                                        : nullptr) +
+                 " anim_instance_class=" + object_name(object_is_valid(anim_instance)
+                                                            ? anim_instance->GetClassPrivate()
+                                                            : nullptr));
     remote.appearance_dirty = true;
     logger_.info("REMOTE_SPAWNED player=" + std::to_string(player_id) + " actor=" + object_name(remote.actor));
     return remote.actor;
 }
 
-auto GameBridge::apply_remote_transform(RemotePlayer& remote) -> void
+auto GameBridge::apply_remote_transform(std::uint64_t player_id, RemotePlayer& remote) -> void
 {
     if (!object_is_valid(remote.actor) || !remote.transform) return;
     const auto& state = *remote.transform;
@@ -525,6 +665,47 @@ auto GameBridge::apply_remote_transform(RemotePlayer& remote) -> void
     FRotator rotation(state.pitch, state.yaw, state.roll);
     FHitResult hit_result{};
     remote.actor->K2_SetActorLocationAndRotation(location, rotation, false, hit_result, true);
+
+    if (!object_is_valid(remote.movement_component))
+    {
+        remote.movement_component = find_remote_movement_component(remote.actor);
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto snapshot_stale = now - remote.last_transform_received > std::chrono::milliseconds(750);
+    const auto velocity_x = snapshot_stale ? 0.0F : remote.velocity_x;
+    const auto velocity_y = snapshot_stale ? 0.0F : remote.velocity_y;
+    const auto velocity_z = snapshot_stale ? 0.0F : remote.velocity_z;
+    const auto speed = snapshot_stale ? 0.0F : remote.speed;
+    if (auto* velocity = vector_property(remote.movement_component, "Velocity"))
+    {
+        *velocity = FVector(velocity_x, velocity_y, velocity_z);
+    }
+    else if (!remote.movement_warning_logged)
+    {
+        remote.movement_warning_logged = true;
+        logger_.warning("REMOTE_MOVEMENT_COMPONENT_MISSING player=" + std::to_string(player_id));
+    }
+
+    if (now >= remote.next_motion_log)
+    {
+        remote.next_motion_log = now + std::chrono::seconds(2);
+        FVector observed_velocity{};
+        if (!call_vector_return(remote.actor, "GetVelocity", observed_velocity))
+        {
+            if (auto* observed = vector_property(remote.movement_component, "Velocity")) observed_velocity = *observed;
+        }
+        const auto* movement_mode = byte_property(remote.movement_component, "MovementMode");
+        logger_.info("REMOTE_MOTION player=" + std::to_string(player_id) +
+                     " speed=" + std::to_string(speed) +
+                     " velocity=" + std::to_string(velocity_x) + "," +
+                                      std::to_string(velocity_y) + "," +
+                                      std::to_string(velocity_z) +
+                     " observed=" + std::to_string(observed_velocity.X()) + "," +
+                                    std::to_string(observed_velocity.Y()) + "," +
+                                    std::to_string(observed_velocity.Z()) +
+                     " movement_mode=" + (movement_mode ? std::to_string(*movement_mode) : "unavailable"));
+    }
 }
 
 auto GameBridge::apply_remote_appearance(RemotePlayer& remote) -> void
@@ -551,7 +732,6 @@ auto GameBridge::disable_remote_ai(AActor* actor) -> void
 {
     if (!object_is_valid(actor)) return;
     actor->SetActorEnableCollision(false);
-    actor->SetActorTickEnabled(false);
     auto* controller = object_property(actor, config_.controller_property);
     call_no_args(controller, "StopMovement");
     if (object_is_valid(controller))

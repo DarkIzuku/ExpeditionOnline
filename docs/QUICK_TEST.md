@@ -7,8 +7,8 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 1. Abre una terminal dentro de `Server` y ejecuta `ExpeditionOnlineServer.exe`.
 2. Debe aparecer `READY TCP 0.0.0.0:7777 protocol=2`.
 3. Abre dos terminales dentro de `Probe`.
-4. En la primera ejecuta `ExpeditionOnlineProbe.exe --name ProbeA --zone SharedZone --x 0 --y 0 --z 0 --yaw 0 --radius 300 --duration 30`.
-5. En la segunda ejecuta `ExpeditionOnlineProbe.exe --name ProbeB --zone SharedZone --x 1000 --y 1000 --z 0 --yaw 90 --radius 300 --duration 30`.
+4. En la primera ejecuta `ExpeditionOnlineProbe.exe --name ProbeA --zone SharedZone --x 0 --y 0 --z 0 --yaw 0 --radius 300 --angular-speed 1 --duration 30`.
+5. En la segunda ejecuta `ExpeditionOnlineProbe.exe --name ProbeB --zone SharedZone --x 1000 --y 1000 --z 0 --yaw 90 --radius 300 --angular-speed 1 --duration 30`.
 6. Cada probe debe mostrar un `Welcome` con un ID distinto y eventos `PlayerJoined`, `ZoneState`, `AppearanceState` y `TransformSnapshot` del otro.
 7. Cierra ProbeA. ProbeB debe recibir `PlayerLeft` con el ID de ProbeA.
 
@@ -53,16 +53,18 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 9. Ejecuta el probe sustituyendo los valores entre ángulos (las comillas de la zona son obligatorias):
 
    ```powershell
-   .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --duration 60
+   .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --angular-speed 1 --duration 60
    ```
 
-   El probe envía snapshots cada 250 ms y recorre un círculo de radio 300 alrededor de esa posición. Usa `--radius 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
+   El probe envía snapshots cada 250 ms y recorre un círculo de radio 300 a 1 radián/segundo: aproximadamente 300 unidades/segundo, suficiente para provocar locomoción. Usa `--radius 0` o `--angular-speed 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
 
 10. El resultado esperado es:
 
    ```text
    REMOTE_PLAYER_JOINED player=... name=Probe
    REMOTE_SPAWNED player=... actor=BP_Pawn_AICompanion_...
+   REMOTE_MOTION_SETUP player=... movement_component=... movement_class=... anim_instance_class=...
+   REMOTE_MOTION player=... speed=... velocity=... observed=... movement_mode=...
    ```
 
    El servidor también debe mostrar `CONNECT`, `HELLO`, `ZONE`, `PLAYER_JOINED` y tráfico de apariencia.
@@ -108,9 +110,16 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su movimi
 
 ### `LOCAL_APPEARANCE` muestra `character=Unknown`
 
-- La identidad se infiere del `SkeletalMesh` activo de `Pawn.Mesh`, no de la clase genérica `BP_jRPG_Character_World_C`.
+- La identidad se infiere únicamente del `SkeletalMesh` del componente owned `Body`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo.
+- Busca `APPEARANCE_BODY_COMPONENT component=...Body` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
 - El log debe incluir `outfit=SkeletalMesh /Game/...`. Si `outfit` queda vacío, conserva el log completo para identificar el nombre real del componente en esa versión del juego.
 - Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
+
+### El remoto se mueve pero permanece en idle
+
+- `REMOTE_MOTION_SETUP` debe mostrar un `CharacterMovementComponent` y la clase del `AnimInstance`.
+- Mientras el Probe recorre el círculo, `REMOTE_MOTION speed` debe estar cerca de `radius × angular-speed`; con los valores recomendados será aproximadamente 300.
+- `velocity` es el valor calculado y escrito; `observed` es lo que devuelve `GetVelocity` del actor. Si `velocity` es distinto de cero pero `observed` queda en cero o el AnimBP sigue en idle, conserva esas líneas junto con `movement_mode` para la siguiente iteración.
 
 ### Protocolo incompatible
 

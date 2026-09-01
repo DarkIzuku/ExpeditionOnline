@@ -27,6 +27,7 @@ struct Options
     float z{};
     float yaw{};
     float radius{300.0F};
+    float angular_speed{1.0F};
     bool show_help{};
 };
 
@@ -47,6 +48,7 @@ auto print_usage() -> void
         << "  --z <float>         Fixed Z from LOCAL_TRANSFORM (default: 0)\n"
         << "  --yaw <float>       Fixed yaw in degrees (default: 0)\n"
         << "  --radius <float>    Circular movement radius (default: 300)\n"
+        << "  --angular-speed <float>  Circle speed in radians/sec (default: 1)\n"
         << "  --help              Show this help\n";
 }
 
@@ -76,11 +78,12 @@ auto parse_options(int argc, char** argv) -> Options
         else if (argument == "--z") options.z = std::stof(next_value());
         else if (argument == "--yaw") options.yaw = std::stof(next_value());
         else if (argument == "--radius") options.radius = std::stof(next_value());
+        else if (argument == "--angular-speed") options.angular_speed = std::stof(next_value());
         else throw std::runtime_error("unknown or incomplete argument: " + argument);
     }
     if (options.duration_seconds < 1) throw std::runtime_error("duration must be at least 1 second");
     if (!std::isfinite(options.x) || !std::isfinite(options.y) || !std::isfinite(options.z) ||
-        !std::isfinite(options.yaw) || !std::isfinite(options.radius))
+        !std::isfinite(options.yaw) || !std::isfinite(options.radius) || !std::isfinite(options.angular_speed))
     {
         throw std::runtime_error("position, yaw and radius must be finite numbers");
     }
@@ -176,7 +179,8 @@ auto main(int argc, char** argv) -> int
                                      proto::AppearanceState{0, "ProbeCharacter", "ProbeBody", "ProbeHair"}));
         std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
                   << " base=" << options.x << ',' << options.y << ',' << options.z
-                  << " yaw=" << options.yaw << " radius=" << options.radius << '\n';
+                  << " yaw=" << options.yaw << " radius=" << options.radius
+                  << " angular_speed=" << options.angular_speed << '\n';
 
         proto::FrameDecoder decoder;
         std::array<std::uint8_t, 64U * 1024U> buffer{};
@@ -188,8 +192,9 @@ auto main(int argc, char** argv) -> int
             if (now >= next_snapshot)
             {
                 const auto elapsed = std::chrono::duration<float>(now - start).count();
-                const auto x = options.x + std::cos(elapsed) * options.radius;
-                const auto y = options.y + std::sin(elapsed) * options.radius;
+                const auto angle = elapsed * options.angular_speed;
+                const auto x = options.x + std::cos(angle) * options.radius;
+                const auto y = options.y + std::sin(angle) * options.radius;
                 const auto timestamp = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());

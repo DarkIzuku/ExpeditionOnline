@@ -23,9 +23,10 @@ En exploración, el cliente usa la arquitectura validada:
 - Controller: `BP_jRPG_Controller_World_C`.
 - Pawn local: `BP_jRPG_Character_World_C`.
 - Visual remoto: un actor nuevo `BP_Pawn_AICompanion_*_C`.
-- Apariencia: el cuerpo se resuelve primero desde `Pawn.Mesh` (componente `Body`) y el pelo desde el componente owned `Haircut_SkeletalMesh`; ambos leen su `SkeletalMesh` activo.
+- Apariencia: el cuerpo se obtiene exclusivamente del `SkeletalMeshComponent` owned cuyo nombre es `Body`; se ignora `Pawn.Mesh`/`CharacterMesh0` porque en este juego contiene `SKM_Quinn`. El pelo se lee del componente owned `Haircut_SkeletalMesh`.
 - Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
 - El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
+- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` y la escribe en `CharacterMovement.Velocity`. La posición recibida continúa siendo autoritativa; no se envían paquetes de animación.
 
 Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan tick y colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. No se reutiliza ni altera un companion real.
 
@@ -71,5 +72,6 @@ Sigue [docs/QUICK_TEST.md](docs/QUICK_TEST.md). La especificación completa est�
 - Sin story flags, quests, inventario, equipo funcional o saves compartidos.
 - Sin autenticación ni cifrado: usar solo en LAN/VPN de confianza.
 - Sin interpolación de snapshots todavía.
+- La locomoción depende de que el AnimBP existente del companion consuma `GetVelocity`; los logs `REMOTE_MOTION_SETUP` y `REMOTE_MOTION` exponen los valores observados para la prueba runtime.
 
 Para una fase futura quedan documentados los actores de batalla `BP_Maelle_Battle_C`, `BP_Verso_Battle2_C`, `BP_Sciel_Battle_C` y el patrón de armas `BP_WeaponSkin_<Character>_<Weapon>_C`.

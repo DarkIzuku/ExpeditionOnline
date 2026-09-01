@@ -35,10 +35,19 @@ class GameBridge
     {
         std::string zone;
         std::optional<protocol::AppearanceState> appearance;
+        std::optional<protocol::TransformSnapshot> previous_transform;
         std::optional<protocol::TransformSnapshot> transform;
         RC::Unreal::AActor* actor{};
+        RC::Unreal::UObject* movement_component{};
+        float velocity_x{};
+        float velocity_y{};
+        float velocity_z{};
+        float speed{};
         bool appearance_dirty{};
         bool fallback_warning_logged{};
+        bool movement_warning_logged{};
+        std::chrono::steady_clock::time_point last_transform_received{};
+        std::chrono::steady_clock::time_point next_motion_log{};
     };
 
     auto process_incoming() -> void;
@@ -48,7 +57,7 @@ class GameBridge
     auto current_zone(RC::Unreal::AActor* pawn) -> std::string;
     auto capture_appearance(RC::Unreal::AActor* pawn) -> protocol::AppearanceState;
     auto ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remote) -> RC::Unreal::AActor*;
-    auto apply_remote_transform(RemotePlayer& remote) -> void;
+    auto apply_remote_transform(std::uint64_t player_id, RemotePlayer& remote) -> void;
     auto apply_remote_appearance(RemotePlayer& remote) -> void;
     auto disable_remote_ai(RC::Unreal::AActor* actor) -> void;
     auto destroy_remote(std::uint64_t player_id) -> void;
@@ -64,6 +73,9 @@ class GameBridge
     RC::Unreal::AActor* local_visual_pawn_{};
     RC::Unreal::UObject* local_body_component_{};
     RC::Unreal::UObject* local_hair_component_{};
+    std::string last_body_component_log_;
+    std::string last_body_mesh_log_;
+    bool body_diagnostic_initialized_{};
     bool resync_requested_{};
     bool exploration_available_{};
     bool shutdown_{};
