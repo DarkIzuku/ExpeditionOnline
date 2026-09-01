@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $p
 
 $help = (& $probeExe --help 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "Probe --help failed with exit code $LASTEXITCODE" }
-foreach ($option in "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed") {
+foreach ($option in "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed", "--snapshot-hz") {
     if ($help -notmatch [regex]::Escape($option)) { throw "Probe --help is missing $option" }
 }
 
@@ -44,12 +44,12 @@ try {
     if ($server.HasExited) { throw "Server exited before probes connected" }
 
     $probeA = Start-Process -FilePath $probeExe `
-        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeA", "--zone", "SharedZone", "--duration", "3", "--x", "100", "--y", "200", "--z", "300", "--yaw", "45", "--radius", "25", "--angular-speed", "2" `
+        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeA", "--zone", "SharedZone", "--duration", "3", "--x", "100", "--y", "200", "--z", "300", "--yaw", "45", "--radius", "25", "--angular-speed", "2", "--snapshot-hz", "4" `
         -WorkingDirectory $logRoot -WindowStyle Hidden `
         -RedirectStandardOutput $probeAOut -RedirectStandardError $probeAErr -PassThru
     Start-Sleep -Milliseconds 400
     $probeB = Start-Process -FilePath $probeExe `
-        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeB", "--zone", "SharedZone", "--duration", "5", "--x", "-400", "--y", "-500", "--z", "-600", "--yaw", "90", "--radius", "40", "--angular-speed", "0.5" `
+        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeB", "--zone", "SharedZone", "--duration", "5", "--x", "-400", "--y", "-500", "--z", "-600", "--yaw", "90", "--radius", "40", "--angular-speed", "0.5", "--snapshot-hz", "15" `
         -WorkingDirectory $logRoot -WindowStyle Hidden `
         -RedirectStandardOutput $probeBOut -RedirectStandardError $probeBErr -PassThru
 
@@ -116,7 +116,9 @@ try {
     if ($a -match 'FATAL|timeout' -or $b -match 'FATAL|timeout') { throw "Unexpected probe error or timeout" }
     if ($a -notmatch 'CONNECTED[^\r\n]*angular_speed=2(?:\.0+)?') { throw "Probe A did not apply --angular-speed 2" }
     if ($b -notmatch 'CONNECTED[^\r\n]*angular_speed=0\.5') { throw "Probe B did not apply --angular-speed 0.5" }
-    Write-Host "PASS: IDs $idA/$idB; positional/angular-speed options, relay state and PlayerLeft verified."
+    if ($a -notmatch 'CONNECTED[^\r\n]*snapshot_hz=4') { throw "Probe A did not apply --snapshot-hz 4" }
+    if ($b -notmatch 'CONNECTED[^\r\n]*snapshot_hz=15') { throw "Probe B did not apply --snapshot-hz 15" }
+    Write-Host "PASS: IDs $idA/$idB; position, motion rate, relay state and PlayerLeft verified."
 }
 finally {
     if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }

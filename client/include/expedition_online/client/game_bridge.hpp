@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -35,8 +36,8 @@ class GameBridge
     {
         std::string zone;
         std::optional<protocol::AppearanceState> appearance;
-        std::optional<protocol::TransformSnapshot> previous_transform;
-        std::optional<protocol::TransformSnapshot> transform;
+        std::deque<protocol::TransformSnapshot> snapshots;
+        std::optional<protocol::TransformSnapshot> last_rendered_transform;
         RC::Unreal::AActor* actor{};
         RC::Unreal::UObject* movement_component{};
         float velocity_x{};
@@ -46,8 +47,11 @@ class GameBridge
         bool appearance_dirty{};
         bool fallback_warning_logged{};
         bool movement_warning_logged{};
-        std::chrono::steady_clock::time_point last_transform_received{};
+        bool clock_offset_initialized{};
+        double clock_offset_ms{};
+        std::uint64_t last_transform_received_ms{};
         std::chrono::steady_clock::time_point next_motion_log{};
+        std::chrono::steady_clock::time_point next_interpolation_log{};
     };
 
     auto process_incoming() -> void;
@@ -81,6 +85,7 @@ class GameBridge
     bool shutdown_{};
     std::chrono::steady_clock::time_point next_bridge_tick_{};
     std::chrono::steady_clock::time_point next_appearance_capture_{};
+    std::chrono::steady_clock::time_point next_appearance_pending_log_{};
     std::chrono::steady_clock::time_point next_snapshot_{};
     std::chrono::steady_clock::time_point next_local_transform_log_{};
 };

@@ -1,13 +1,16 @@
+#include <expedition_online/client_logic.hpp>
 #include <expedition_online/protocol.hpp>
 
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace proto = expedition_online::protocol;
+namespace logic = expedition_online::client_logic;
 
 namespace
 {
@@ -94,6 +97,81 @@ auto test_rejections() -> void
     }
     check(rejected, "invalid magic rejection");
 }
+
+auto snapshot(std::uint64_t timestamp, float x, float yaw = 0.0F) -> proto::TransformSnapshot
+{
+    return proto::TransformSnapshot{7, timestamp, x, x * 2.0F, x * 3.0F, 0.0F, yaw, 0.0F};
+}
+
+auto test_snapshot_interpolation() -> void
+{
+    std::deque<proto::TransformSnapshot> buffer;
+    logic::insert_snapshot(buffer, snapshot(200, 10.0F, -170.0F));
+    logic::insert_snapshot(buffer, snapshot(100, 0.0F, 170.0F));
+    logic::insert_snapshot(buffer, snapshot(300, 20.0F));
+    check(buffer.size() == 3, "snapshot buffer size");
+    check(buffer[0].timestamp_ms == 100 && buffer[1].timestamp_ms == 200 && buffer[2].timestamp_ms == 300,
+          "snapshot buffer ordering");
+
+    logic::insert_snapshot(buffer, snapshot(200, 12.0F, -170.0F));
+    check(buffer.size() == 3 && std::fabs(buffer[1].x - 12.0F) < 0.0001F,
+          "duplicate snapshot replacement");
+
+    const auto interpolated = logic::sample_snapshot(buffer, 150);
+    check(interpolated && interpolated->interpolated, "interpolation sample available");
+    check(std::fabs(interpolated->transform.x - 6.0F) < 0.0001F, "position lerp");
+    check(std::fabs(std::fabs(interpolated->transform.yaw) - 180.0F) < 0.0001F,
+          "yaw shortest path interpolation");
+
+    const auto beyond_latest = logic::sample_snapshot(buffer, 999);
+    check(beyond_latest && !beyond_latest->interpolated &&
+              beyond_latest->transform.timestamp_ms == buffer.back().timestamp_ms,
+          "no indefinite snapshot extrapolation");
+
+    check(!logic::snapshot_stream_is_stale(1750, 1000), "snapshot not stale at threshold");
+    check(logic::snapshot_stream_is_stale(1751, 1000), "snapshot stale after threshold");
+}
+
+auto test_appearance_selection() -> void
+{
+    logic::AppearanceCandidate direct{
+        "Body",
+        "SkeletalMeshComponent /Game/Map.Pawn.Body",
+        "BP_jRPG_Character_World_C /Game/Map.Pawn",
+        "SkeletalMesh /Game/Characters/Heros/Lune/Outfits/SK_Lune_Chic_Skin.SK_Lune_Chic_Skin",
+        true,
+        false,
+        true,
+    };
+    check(logic::score_appearance_candidate(direct) > 0, "direct pawn Body candidate");
+
+    auto skin = direct;
+    skin.owner_full_name = "BP_CharacterSkin_ScielOutfit_Chic_C /Game/Map.Skin";
+    skin.mesh_full_name = "SkeletalMesh /Game/Characters/Heros/Sciel/Outfits/SK_Sciel_Chic_Skin.SK_Sciel_Chic_Skin";
+    skin.directly_owned_by_pawn = false;
+    skin.owner_is_character_skin = true;
+    skin.related_to_pawn = true;
+    check(logic::score_appearance_candidate(skin) > 0,
+          "related character skin Body candidate accepted");
+
+    auto generic = direct;
+    generic.component_leaf = "SkeletalMeshComponent_2147473671";
+    check(logic::score_appearance_candidate(generic) < 0, "generic component rejected");
+    auto quinn = direct;
+    quinn.mesh_full_name = "SkeletalMesh /Game/Characters/Mannequins/Meshes/SKM_Quinn.SKM_Quinn";
+    check(logic::score_appearance_candidate(quinn) < 0, "Quinn body rejected");
+    auto unrelated = skin;
+    unrelated.related_to_pawn = false;
+    check(logic::score_appearance_candidate(unrelated) < 0, "unrelated skin rejected");
+
+    const proto::AppearanceState valid{1, "Lune", direct.mesh_full_name, "/Game/Characters/Hair/LuneHair"};
+    const proto::AppearanceState pending{1, "Unknown", "", "/Game/Characters/Hair/ScielHair"};
+    const auto retained = logic::select_effective_appearance(valid, pending);
+    check(retained && retained->character_class == "Lune" && retained->outfit_mesh == valid.outfit_mesh,
+          "pending Unknown does not replace last valid appearance");
+    check(!logic::select_effective_appearance(std::nullopt, pending),
+          "initial Unknown remains pending");
+}
 } // namespace
 
 auto main() -> int
@@ -103,6 +181,8 @@ auto main() -> int
         test_payloads();
         test_fragmented_frames();
         test_rejections();
+        test_snapshot_interpolation();
+        test_appearance_selection();
         std::cout << "All protocol tests passed\n";
         return 0;
     }

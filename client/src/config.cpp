@@ -58,6 +58,7 @@ auto load_client_config(const std::filesystem::path& path) -> ClientConfig
         else if (key == "player_name" || key == "PlayerName") config.player_name = value;
         else if (key == "reconnect_delay_ms") config.reconnect_delay_ms = std::clamp(std::stoi(value), 250, 60000);
         else if (key == "snapshot_hz") config.snapshot_hz = std::clamp(std::stoi(value), 1, 60);
+        else if (key == "interpolation_delay_ms") config.interpolation_delay_ms = std::clamp(std::stoi(value), 0, 2000);
         else if (key == "controller_class") config.controller_class = value;
         else if (key == "pawn_property") config.pawn_property = value;
         else if (key == "body_component_property") config.body_component_property = value;

@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(ExpeditionOnlineProtocol STATIC
+    shared/src/client_logic.cpp
     shared/src/protocol.cpp
     shared/src/socket.cpp
 )

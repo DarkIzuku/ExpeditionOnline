@@ -14,6 +14,7 @@ struct ClientConfig
     std::string player_name{"Expeditioner"};
     int reconnect_delay_ms{2000};
     int snapshot_hz{15};
+    int interpolation_delay_ms{100};
 
     std::string controller_class{"BP_jRPG_Controller_World_C"};
     std::string pawn_property{"Pawn"};

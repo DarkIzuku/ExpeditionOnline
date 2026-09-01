@@ -28,6 +28,7 @@ struct Options
     float yaw{};
     float radius{300.0F};
     float angular_speed{1.0F};
+    int snapshot_hz{4};
     bool show_help{};
 };
 
@@ -49,6 +50,7 @@ auto print_usage() -> void
         << "  --yaw <float>       Fixed yaw in degrees (default: 0)\n"
         << "  --radius <float>    Circular movement radius (default: 300)\n"
         << "  --angular-speed <float>  Circle speed in radians/sec (default: 1)\n"
+        << "  --snapshot-hz <rate> Snapshot send rate in Hz (default: 4)\n"
         << "  --help              Show this help\n";
 }
 
@@ -79,6 +81,7 @@ auto parse_options(int argc, char** argv) -> Options
         else if (argument == "--yaw") options.yaw = std::stof(next_value());
         else if (argument == "--radius") options.radius = std::stof(next_value());
         else if (argument == "--angular-speed") options.angular_speed = std::stof(next_value());
+        else if (argument == "--snapshot-hz") options.snapshot_hz = std::stoi(next_value());
         else throw std::runtime_error("unknown or incomplete argument: " + argument);
     }
     if (options.duration_seconds < 1) throw std::runtime_error("duration must be at least 1 second");
@@ -88,6 +91,10 @@ auto parse_options(int argc, char** argv) -> Options
         throw std::runtime_error("position, yaw and radius must be finite numbers");
     }
     if (options.radius < 0.0F) throw std::runtime_error("radius must be zero or greater");
+    if (options.snapshot_hz < 1 || options.snapshot_hz > 60)
+    {
+        throw std::runtime_error("snapshot-hz must be in 1..60");
+    }
     return options;
 }
 
@@ -180,7 +187,8 @@ auto main(int argc, char** argv) -> int
         std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
                   << " base=" << options.x << ',' << options.y << ',' << options.z
                   << " yaw=" << options.yaw << " radius=" << options.radius
-                  << " angular_speed=" << options.angular_speed << '\n';
+                  << " angular_speed=" << options.angular_speed
+                  << " snapshot_hz=" << options.snapshot_hz << '\n';
 
         proto::FrameDecoder decoder;
         std::array<std::uint8_t, 64U * 1024U> buffer{};
@@ -202,7 +210,7 @@ auto main(int argc, char** argv) -> int
                            proto::make_frame(proto::MessageType::transform_snapshot,
                                              sequence++,
                                              proto::TransformSnapshot{0, timestamp, x, y, options.z, 0.0F, options.yaw, 0.0F}));
-                next_snapshot = now + std::chrono::milliseconds(250);
+                next_snapshot = now + std::chrono::milliseconds(1000 / options.snapshot_hz);
             }
 
             if (eo::net::wait_readable(socket, 50, error))

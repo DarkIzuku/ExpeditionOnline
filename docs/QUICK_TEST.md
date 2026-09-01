@@ -38,6 +38,7 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
    ```ini
    ServerHost=127.0.0.1
    ServerPort=7777
+   interpolation_delay_ms=300
    ```
 
 5. Ejecuta `Server/ExpeditionOnlineServer.exe`.
@@ -53,10 +54,10 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 9. Ejecuta el probe sustituyendo los valores entre ángulos (las comillas de la zona son obligatorias):
 
    ```powershell
-   .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --angular-speed 1 --duration 60
+   .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --angular-speed 1 --snapshot-hz 4 --duration 60
    ```
 
-   El probe envía snapshots cada 250 ms y recorre un círculo de radio 300 a 1 radián/segundo: aproximadamente 300 unidades/segundo, suficiente para provocar locomoción. Usa `--radius 0` o `--angular-speed 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
+   El probe envía aquí 4 snapshots por segundo y recorre un círculo de radio 300 a 1 radián/segundo: aproximadamente 300 unidades/segundo, suficiente para provocar locomoción. Para esta prueba deliberadamente lenta usa `interpolation_delay_ms=300`; con clientes reales a `snapshot_hz=15`, empieza con 100-150 ms. Usa `--radius 0` o `--angular-speed 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
 
 10. El resultado esperado es:
 
@@ -65,6 +66,7 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
    REMOTE_SPAWNED player=... actor=BP_Pawn_AICompanion_...
    REMOTE_MOTION_SETUP player=... movement_component=... movement_class=... anim_instance_class=...
    REMOTE_MOTION player=... speed=... velocity=... observed=... movement_mode=...
+   REMOTE_INTERPOLATION player=... buffer=... delay_ms=300 alpha=... render_xyz=... target_xyz=...
    ```
 
    El servidor también debe mostrar `CONNECT`, `HELLO`, `ZONE`, `PLAYER_JOINED` y tráfico de apariencia.
@@ -108,12 +110,19 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su movimi
 - Busca `REMOTE_SPAWN_WAIT` o `REMOTE_SPAWN_FAILED`; indican que la clase companion no está cargada o no coincide con el mapping.
 - Prueba en exploración. Durante combate `PlayerController.Pawn` puede ser `null` y esta versión elimina los remotos deliberadamente.
 
-### `LOCAL_APPEARANCE` muestra `character=Unknown`
+### La apariencia tarda en estar lista o cambia de personaje
 
-- La identidad se infiere únicamente del `SkeletalMesh` del componente owned `Body`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo.
+- La identidad se infiere únicamente del `SkeletalMesh` de un componente exacto `Body`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo. El componente puede pertenecer al Pawn o a un actor visual relacionado `BP_CharacterSkin_*`.
 - Busca `APPEARANCE_BODY_COMPONENT component=...Body` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
-- El log debe incluir `outfit=SkeletalMesh /Game/...`. Si `outfit` queda vacío, conserva el log completo para identificar el nombre real del componente en esa versión del juego.
+- Mientras Unreal reconstruye el skin puede aparecer `LOCAL_APPEARANCE_PENDING reason=body_not_ready`; el cliente conserva la última apariencia válida y no envía `Unknown`.
+- Tras un cambio Lune -> Sciel, el log debe publicar un nuevo `LOCAL_APPEARANCE character=Sciel ...` cuando el nuevo Body esté listo.
 - Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
+
+### El remoto se mueve a tirones
+
+- Busca `REMOTE_INTERPOLATION`. `buffer` debe crecer, `delay_ms` debe coincidir con la configuración y `render_xyz` normalmente debe quedar entre snapshots, no saltar siempre a `target_xyz`.
+- Para Probe a 4 Hz usa 300 ms. Para clientes reales a 15 Hz usa 100-150 ms.
+- Si no llegan snapshots durante más de 750 ms, el actor conserva la última posición y su Velocity pasa a cero; no extrapola indefinidamente.
 
 ### El remoto se mueve pero permanece en idle
 
