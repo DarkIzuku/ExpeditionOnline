@@ -47,6 +47,7 @@ class GameBridge
         bool appearance_dirty{};
         bool fallback_warning_logged{};
         bool movement_warning_logged{};
+        bool character_respawn_pending{};
         bool clock_offset_initialized{};
         double clock_offset_ms{};
         std::uint64_t last_transform_received_ms{};
@@ -62,7 +63,7 @@ class GameBridge
     auto capture_appearance(RC::Unreal::AActor* pawn) -> protocol::AppearanceState;
     auto ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remote) -> RC::Unreal::AActor*;
     auto apply_remote_transform(std::uint64_t player_id, RemotePlayer& remote) -> void;
-    auto apply_remote_appearance(RemotePlayer& remote) -> void;
+    auto apply_remote_appearance(std::uint64_t player_id, RemotePlayer& remote) -> void;
     auto disable_remote_ai(RC::Unreal::AActor* actor) -> void;
     auto destroy_remote(std::uint64_t player_id) -> void;
     auto destroy_all_remotes() -> void;
@@ -83,6 +84,7 @@ class GameBridge
     std::size_t appearance_failure_count_{};
     bool resync_requested_{};
     bool exploration_available_{};
+    bool network_was_connected_{};
     bool shutdown_{};
     std::chrono::steady_clock::time_point next_bridge_tick_{};
     std::chrono::steady_clock::time_point next_appearance_capture_{};

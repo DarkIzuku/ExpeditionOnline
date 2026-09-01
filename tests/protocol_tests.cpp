@@ -73,6 +73,12 @@ auto test_fragmented_frames() -> void
 
 auto test_rejections() -> void
 {
+    check(proto::is_known_message_type(proto::MessageType::hello), "known Hello type");
+    check(proto::is_known_message_type(proto::MessageType::pong), "known Pong type");
+    check(!proto::is_known_message_type(static_cast<proto::MessageType>(65535)), "unknown type rejection helper");
+    check(proto::is_empty_payload_message(proto::MessageType::ping), "Ping empty payload helper");
+    check(!proto::is_empty_payload_message(proto::MessageType::hello), "Hello is not empty payload");
+
     bool rejected{};
     try
     {

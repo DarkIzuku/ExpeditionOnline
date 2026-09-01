@@ -2,6 +2,7 @@
 #include <expedition_online/client/game_bridge.hpp>
 #include <expedition_online/client/logger.hpp>
 #include <expedition_online/client/network_client.hpp>
+#include <expedition_online/build_info.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -35,7 +36,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase
     ExpeditionOnlineMod()
     {
         ModName = STR("ExpeditionOnline");
-        ModVersion = STR("0.2.0");
+        ModVersion = STR("0.3.0-rc1");
         ModDescription = STR("Exploration-only online co-op relay prototype for Clair Obscur: Expedition 33");
         ModAuthors = STR("ExpeditionOnline contributors");
         RC::Output::send<RC::LogLevel::Verbose>(STR("[ExpeditionOnline] native mod loaded\n"));
@@ -63,7 +64,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase
             const auto root = mod_root();
             logger_ = std::make_unique<Logger>(root / "ExpeditionOnline.log");
             config_ = load_client_config(root / "config" / "config.ini");
-            logger_->info("START protocol=" + std::to_string(protocol::kProtocolVersion) +
+            logger_->info(build_info::identity("Client", protocol::kProtocolVersion) +
                           " server=" + config_.host + ':' + std::to_string(config_.port));
             network_ = std::make_unique<NetworkClient>(config_, *logger_);
             bridge_ = std::make_unique<GameBridge>(config_, *network_, *logger_);

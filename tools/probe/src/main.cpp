@@ -1,3 +1,4 @@
+#include <expedition_online/build_info.hpp>
 #include <expedition_online/protocol.hpp>
 #include <expedition_online/socket.hpp>
 
@@ -29,6 +30,9 @@ struct Options
     float radius{300.0F};
     float angular_speed{1.0F};
     int snapshot_hz{4};
+    bool duration_explicit{};
+    bool movement_demo{};
+    bool jump_demo{};
     bool show_help{};
 };
 
@@ -51,6 +55,8 @@ auto print_usage() -> void
         << "  --radius <float>    Circular movement radius (default: 300)\n"
         << "  --angular-speed <float>  Circle speed in radians/sec (default: 1)\n"
         << "  --snapshot-hz <rate> Snapshot send rate in Hz (default: 4)\n"
+        << "  --movement-demo      Idle 5s, walk 10s, run 10s, stop 5s\n"
+        << "  --jump-demo          Ground, ascend, apex, descend and land trajectory\n"
         << "  --help              Show this help\n";
 }
 
@@ -74,7 +80,11 @@ auto parse_options(int argc, char** argv) -> Options
         }
         else if (argument == "--name") options.name = next_value();
         else if (argument == "--zone") options.zone = next_value();
-        else if (argument == "--duration") options.duration_seconds = std::stoi(next_value());
+        else if (argument == "--duration")
+        {
+            options.duration_seconds = std::stoi(next_value());
+            options.duration_explicit = true;
+        }
         else if (argument == "--x") options.x = std::stof(next_value());
         else if (argument == "--y") options.y = std::stof(next_value());
         else if (argument == "--z") options.z = std::stof(next_value());
@@ -82,6 +92,8 @@ auto parse_options(int argc, char** argv) -> Options
         else if (argument == "--radius") options.radius = std::stof(next_value());
         else if (argument == "--angular-speed") options.angular_speed = std::stof(next_value());
         else if (argument == "--snapshot-hz") options.snapshot_hz = std::stoi(next_value());
+        else if (argument == "--movement-demo") options.movement_demo = true;
+        else if (argument == "--jump-demo") options.jump_demo = true;
         else throw std::runtime_error("unknown or incomplete argument: " + argument);
     }
     if (options.duration_seconds < 1) throw std::runtime_error("duration must be at least 1 second");
@@ -95,7 +107,85 @@ auto parse_options(int argc, char** argv) -> Options
     {
         throw std::runtime_error("snapshot-hz must be in 1..60");
     }
+    if (options.movement_demo && !options.duration_explicit) options.duration_seconds = 30;
+    if (options.jump_demo && !options.movement_demo && !options.duration_explicit) options.duration_seconds = 10;
     return options;
+}
+
+struct DemoTransform
+{
+    float x{};
+    float y{};
+    float z{};
+    float speed{};
+    float velocity_z{};
+    std::string movement_phase;
+    std::string jump_phase;
+};
+
+auto demo_transform(const Options& options, float elapsed) -> DemoTransform
+{
+    DemoTransform result{options.x, options.y, options.z, 0.0F, 0.0F, "CIRCLE", "GROUND"};
+    if (options.movement_demo)
+    {
+        float distance{};
+        if (elapsed < 5.0F) result.movement_phase = "IDLE";
+        else if (elapsed < 15.0F)
+        {
+            result.movement_phase = "WALK";
+            result.speed = 180.0F;
+            distance = (elapsed - 5.0F) * result.speed;
+        }
+        else if (elapsed < 25.0F)
+        {
+            result.movement_phase = "RUN";
+            result.speed = 500.0F;
+            distance = 1800.0F + (elapsed - 15.0F) * result.speed;
+        }
+        else
+        {
+            result.movement_phase = "STOP";
+            distance = 6800.0F;
+        }
+        const auto yaw_radians = options.yaw * 3.14159265358979323846F / 180.0F;
+        result.x = options.x + std::cos(yaw_radians) * distance;
+        result.y = options.y + std::sin(yaw_radians) * distance;
+    }
+    else if (!options.jump_demo)
+    {
+        const auto angle = elapsed * options.angular_speed;
+        result.x = options.x + std::cos(angle) * options.radius;
+        result.y = options.y + std::sin(angle) * options.radius;
+        result.speed = std::abs(options.angular_speed * options.radius);
+    }
+    else result.movement_phase = "IDLE";
+
+    if (options.jump_demo)
+    {
+        constexpr float jump_start = 5.0F;
+        constexpr float launch_velocity = 600.0F;
+        constexpr float gravity = -980.0F;
+        const auto jump_time = elapsed - jump_start;
+        const auto flight_duration = -2.0F * launch_velocity / gravity;
+        if (jump_time < 0.0F)
+        {
+            result.jump_phase = "GROUND";
+        }
+        else if (jump_time < flight_duration)
+        {
+            result.velocity_z = launch_velocity + gravity * jump_time;
+            result.z = options.z + launch_velocity * jump_time + 0.5F * gravity * jump_time * jump_time;
+            if (result.velocity_z > 150.0F) result.jump_phase = "ASCEND";
+            else if (result.velocity_z < -150.0F) result.jump_phase = "DESCEND";
+            else result.jump_phase = "APEX";
+        }
+        else
+        {
+            result.jump_phase = "LAND";
+            result.z = options.z;
+        }
+    }
+    return result;
 }
 
 auto send_frame(eo::net::SocketHandle socket, const proto::Frame& frame) -> void
@@ -175,7 +265,8 @@ auto main(int argc, char** argv) -> int
         send_frame(socket,
                    proto::make_frame(proto::MessageType::hello,
                                      sequence++,
-                                     proto::Hello{options.name, "probe-0.2.0"}));
+                                     proto::Hello{options.name,
+                                                  eo::build_info::identity("Probe", proto::kProtocolVersion)}));
         send_frame(socket,
                    proto::make_frame(proto::MessageType::zone_state,
                                      sequence++,
@@ -188,28 +279,46 @@ auto main(int argc, char** argv) -> int
                   << " base=" << options.x << ',' << options.y << ',' << options.z
                   << " yaw=" << options.yaw << " radius=" << options.radius
                   << " angular_speed=" << options.angular_speed
-                  << " snapshot_hz=" << options.snapshot_hz << '\n';
+                  << " snapshot_hz=" << options.snapshot_hz
+                  << " movement_demo=" << (options.movement_demo ? "true" : "false")
+                  << " jump_demo=" << (options.jump_demo ? "true" : "false") << '\n';
 
         proto::FrameDecoder decoder;
         std::array<std::uint8_t, 64U * 1024U> buffer{};
         const auto start = std::chrono::steady_clock::now();
         auto next_snapshot = start;
+        std::string last_movement_phase;
+        std::string last_jump_phase;
         while (std::chrono::steady_clock::now() - start < std::chrono::seconds(options.duration_seconds))
         {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_snapshot)
             {
                 const auto elapsed = std::chrono::duration<float>(now - start).count();
-                const auto angle = elapsed * options.angular_speed;
-                const auto x = options.x + std::cos(angle) * options.radius;
-                const auto y = options.y + std::sin(angle) * options.radius;
+                const auto demo = demo_transform(options, elapsed);
+                if (demo.movement_phase != last_movement_phase || demo.jump_phase != last_jump_phase)
+                {
+                    std::cout << "DEMO_PHASE movement=" << demo.movement_phase
+                              << " jump=" << demo.jump_phase
+                              << " speed=" << demo.speed
+                              << " velocityZ=" << demo.velocity_z << '\n';
+                    last_movement_phase = demo.movement_phase;
+                    last_jump_phase = demo.jump_phase;
+                }
                 const auto timestamp = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
                 send_frame(socket,
                            proto::make_frame(proto::MessageType::transform_snapshot,
                                              sequence++,
-                                             proto::TransformSnapshot{0, timestamp, x, y, options.z, 0.0F, options.yaw, 0.0F}));
+                                              proto::TransformSnapshot{0,
+                                                                       timestamp,
+                                                                       demo.x,
+                                                                       demo.y,
+                                                                       demo.z,
+                                                                       0.0F,
+                                                                       options.yaw,
+                                                                       0.0F}));
                 next_snapshot = now + std::chrono::milliseconds(1000 / options.snapshot_hz);
             }
 
@@ -218,7 +327,18 @@ auto main(int argc, char** argv) -> int
                 const auto received = eo::net::receive_some(socket, buffer, error);
                 if (received <= 0) throw std::runtime_error(error);
                 decoder.push(std::span<const std::uint8_t>(buffer.data(), static_cast<std::size_t>(received)));
-                for (const auto& frame : decoder.take_frames()) show_frame(frame);
+                for (const auto& frame : decoder.take_frames())
+                {
+                    if (frame.version != proto::kProtocolVersion)
+                        throw std::runtime_error("server protocol version mismatch");
+                    if (frame.type == proto::MessageType::ping)
+                        send_frame(socket,
+                                   proto::Frame{proto::kProtocolVersion,
+                                                proto::MessageType::pong,
+                                                frame.sequence,
+                                                {}});
+                    show_frame(frame);
+                }
             }
             else if (!error.empty())
             {

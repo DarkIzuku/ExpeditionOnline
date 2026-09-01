@@ -37,7 +37,7 @@ jobs:
       - name: Configure Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
 
-      - name: Build server, probe and tests
+      - name: Build server, probe, tools and tests
         shell: pwsh
         run: |
           cmake -S . -B build/standalone -G Ninja `
@@ -45,7 +45,9 @@ jobs:
             -DEXPEDITION_BUILD_CLIENT=OFF `
             -DEXPEDITION_BUILD_SERVER=ON `
             -DEXPEDITION_BUILD_PROBE=ON `
-            -DEXPEDITION_BUILD_TESTS=ON
+            -DEXPEDITION_BUILD_TOOLS=ON `
+            -DEXPEDITION_BUILD_TESTS=ON `
+            -DEXPEDITION_BUILD_COMMIT="${{ github.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/standalone --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -57,6 +59,14 @@ jobs:
       - name: Run server and two-probe integration
         shell: pwsh
         run: .\scripts\test-relay.ps1 -Configuration Release -Port 27888 -BinDirectory build\standalone\bin
+
+      - name: Run exploration self-test
+        shell: pwsh
+        run: .\scripts\test-self.ps1 -Configuration Release -Port 27889 -BinDirectory build\standalone\bin
+
+      - name: Verify Probe movement and jump demos
+        shell: pwsh
+        run: .\scripts\test-probe-demos.ps1 -Configuration Release -Port 27891 -BinDirectory build\standalone\bin
 
       - name: Verify UE4SS source credential
         shell: pwsh
@@ -103,7 +113,9 @@ jobs:
             -DEXPEDITION_BUILD_CLIENT=ON `
             -DEXPEDITION_BUILD_SERVER=OFF `
             -DEXPEDITION_BUILD_PROBE=OFF `
+            -DEXPEDITION_BUILD_TOOLS=OFF `
             -DEXPEDITION_BUILD_TESTS=OFF `
+            -DEXPEDITION_BUILD_COMMIT="${{ github.sha }}" `
             -DUE4SS_ROOT="$env:GITHUB_WORKSPACE/ue4ss-source" `
             -DFETCHCONTENT_QUIET=OFF `
             -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
@@ -133,6 +145,8 @@ jobs:
           $files = @(
             "build/standalone/bin/ExpeditionOnlineServer.exe",
             "build/standalone/bin/ExpeditionOnlineProbe.exe",
+            "build/standalone/bin/ExpeditionOnlineSelfTest.exe",
+            "build/standalone/bin/ExpeditionOnlineDoctor.exe",
             "build/client/package/UE4SS/Mods/ExpeditionOnline/dlls/main.dll"
           )
           foreach ($file in $files) {
@@ -149,6 +163,14 @@ jobs:
             throw "main.dll is not a loadable UE4SS C++ mod: lifecycle exports missing"
           }
 
+      - name: Run Doctor integration
+        shell: pwsh
+        run: |
+          .\scripts\test-doctor.ps1 `
+            -BinDirectory build\standalone\bin `
+            -ClientPackageRoot build\client\package\UE4SS\Mods\ExpeditionOnline `
+            -Port 27890
+
       - name: Package Windows x64 ZIP
         shell: pwsh
         run: |
@@ -161,19 +183,25 @@ jobs:
             -UE4SSRevision "$env:UE4SS_BUILD_REVISION" `
             -BuildDate $buildDate
 
-      - name: Verify final ZIP contents
+      - name: Verify all release ZIP contents
         shell: pwsh
         run: |
           $verify = "build/artifact-verify"
           Expand-Archive -LiteralPath "build/artifact/ExpeditionOnline-Windows-x64.zip" -DestinationPath $verify
           $root = Join-Path $verify "ExpeditionOnline-Windows-x64"
           $required = @(
-            "Server/ExpeditionOnlineServer.exe",
+            "Host/ExpeditionOnlineServer.exe",
+            "Host/ExpeditionOnlineSelfTest.exe",
+            "Host/Start-Server.bat",
             "Probe/ExpeditionOnlineProbe.exe",
-            "UE4SS/Mods/ExpeditionOnline/dlls/main.dll",
-            "UE4SS/Mods/ExpeditionOnline/config/config.ini",
+            "Client/ExpeditionOnlineDoctor.exe",
+            "Client/Install-ExpeditionOnline.bat",
+            "Client/Configure-ExpeditionOnline.bat",
+            "Client/Mod/ExpeditionOnline/dlls/main.dll",
+            "Client/Mod/ExpeditionOnline/config/config.ini",
             "docs/PROTOCOL.md",
-            "docs/QUICK_TEST.md",
+            "docs/QUICK_START_CLIENT.md",
+            "docs/QUICK_START_HOST.md",
             "README.md",
             "VERSION.txt",
             "SHA256SUMS.txt"
@@ -182,6 +210,18 @@ jobs:
             $path = Join-Path $root $relative
             if (-not (Test-Path -LiteralPath $path)) { throw "ZIP is missing $relative" }
             if ((Get-Item -LiteralPath $path).Length -eq 0 -and $relative -notlike "*enabled.txt") { throw "ZIP contains empty file: $relative" }
+          }
+          $separate = @(
+            @{ Zip = "ExpeditionOnline-Host-Windows-x64.zip"; Root = "ExpeditionOnline-Host-Windows-x64"; Files = @("ExpeditionOnlineServer.exe", "ExpeditionOnlineSelfTest.exe", "Start-Server.bat", "server.ini", "QUICK_START_HOST.md") },
+            @{ Zip = "ExpeditionOnline-Client-Windows-x64.zip"; Root = "ExpeditionOnline-Client-Windows-x64"; Files = @("ExpeditionOnlineDoctor.exe", "Install-ExpeditionOnline.bat", "Configure-ExpeditionOnline.bat", "Mod/ExpeditionOnline/dlls/main.dll", "QUICK_START_CLIENT.md") }
+          )
+          foreach ($package in $separate) {
+            $destination = Join-Path $verify $package.Root
+            Expand-Archive -LiteralPath (Join-Path "build/artifact" $package.Zip) -DestinationPath $destination
+            $packageRoot = Join-Path $destination $package.Root
+            foreach ($relative in $package.Files) {
+              if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $relative))) { throw "$($package.Zip) is missing $relative" }
+            }
           }
 
       - name: Upload ExpeditionOnline-Windows-x64
@@ -192,3 +232,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload ExpeditionOnline-Host-Windows-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExpeditionOnline-Host-Windows-x64
+          path: build/artifact/ExpeditionOnline-Host-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload ExpeditionOnline-Client-Windows-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExpeditionOnline-Client-Windows-x64
+          path: build/artifact/ExpeditionOnline-Client-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30

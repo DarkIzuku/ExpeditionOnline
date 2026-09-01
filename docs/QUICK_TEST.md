@@ -5,7 +5,7 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 ## Prueba A — servidor + dos probes
 
 1. Abre una terminal dentro de `Server` y ejecuta `ExpeditionOnlineServer.exe`.
-2. Debe aparecer `READY TCP 0.0.0.0:7777 protocol=2`.
+2. Debe aparecer `SERVER_READY address=0.0.0.0:7777` junto con versión, protocolo y commit.
 3. Abre dos terminales dentro de `Probe`.
 4. En la primera ejecuta `ExpeditionOnlineProbe.exe --name ProbeA --zone SharedZone --x 0 --y 0 --z 0 --yaw 0 --radius 300 --angular-speed 1 --duration 30`.
 5. En la segunda ejecuta `ExpeditionOnlineProbe.exe --name ProbeB --zone SharedZone --x 1000 --y 1000 --z 0 --yaw 90 --radius 300 --angular-speed 1 --duration 30`.
@@ -15,7 +15,7 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 ## Prueba B — Clair Obscur + probe
 
 1. Instala una build de UE4SS compatible con la revisión indicada en `VERSION.txt`.
-2. Copia la carpeta `UE4SS/Mods/ExpeditionOnline` del ZIP dentro de:
+2. Para el paquete de usuario, ejecuta `Client/Install-ExpeditionOnline.bat`. La ruta instalada será:
 
    ```text
    Clair Obscur Expedition 33/
@@ -32,8 +32,7 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
                            └── enabled.txt
    ```
 
-3. Si tu instalación no reconoce `enabled.txt`, añade `ExpeditionOnline : 1` a `ue4ss/Mods/mods.txt`. No dupliques la entrada si ya existe.
-4. Confirma en `config/config.ini`:
+3. Confirma en `config/config.ini`:
 
    ```ini
    ServerHost=127.0.0.1
@@ -41,17 +40,17 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
    interpolation_delay_ms=300
    ```
 
-5. Ejecuta `Server/ExpeditionOnlineServer.exe`.
-6. Inicia Clair Obscur, carga una partida y permanece en exploración.
-7. Comprueba que `ue4ss/UE4SS.log` no muestre un error al cargar `ExpeditionOnline/dlls/main.dll`.
-8. Abre `ue4ss/Mods/ExpeditionOnline/ExpeditionOnline.log` y copia:
+4. Ejecuta `Host/Start-Server.bat`.
+5. Inicia Clair Obscur, carga una partida y permanece en exploración.
+6. Comprueba que `ue4ss/UE4SS.log` no muestre un error al cargar `ExpeditionOnline/dlls/main.dll`.
+7. Abre `ue4ss/Mods/ExpeditionOnline/ExpeditionOnline.log` y copia:
 
    ```text
    LOCAL_ZONE <zona exacta completa>
    LOCAL_TRANSFORM x=<X> y=<Y> z=<Z> yaw=<Yaw>
    ```
 
-9. Ejecuta el probe sustituyendo los valores entre ángulos (las comillas de la zona son obligatorias):
+8. Ejecuta el probe sustituyendo los valores entre ángulos (las comillas de la zona son obligatorias):
 
    ```powershell
    .\ExpeditionOnlineProbe.exe --name Probe --zone "<LOCAL_ZONE>" --x <X> --y <Y> --z <Z> --yaw <Yaw> --radius 300 --angular-speed 1 --snapshot-hz 4 --duration 60
@@ -59,19 +58,21 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 
    El probe envía aquí 4 snapshots por segundo y recorre un círculo de radio 300 a 1 radián/segundo: aproximadamente 300 unidades/segundo, suficiente para provocar locomoción. Para esta prueba deliberadamente lenta usa `interpolation_delay_ms=300`; con clientes reales a `snapshot_hz=15`, empieza con 100-150 ms. Usa `--radius 0` o `--angular-speed 0` para dejarlo quieto. Ejecuta `ExpeditionOnlineProbe.exe --help` para ver todos los valores predeterminados.
 
-10. El resultado esperado es:
+9. El resultado esperado es:
 
    ```text
    REMOTE_PLAYER_JOINED player=... name=Probe
    REMOTE_SPAWNED player=... actor=BP_Pawn_AICompanion_...
    REMOTE_MOTION_SETUP player=... movement_component=... movement_class=... anim_instance_class=...
-   REMOTE_MOTION player=... speed=... velocity=... observed=... movement_mode=...
+   REMOTE_MOTION player=... speed=... velocity=... observed=... movement_mode=... is_falling=...
    REMOTE_INTERPOLATION player=... buffer=... delay_ms=300 alpha=... render_xyz=... target_xyz=...
    ```
 
-   El servidor también debe mostrar `CONNECT`, `HELLO`, `ZONE`, `PLAYER_JOINED` y tráfico de apariencia.
+   El servidor también debe mostrar `PLAYER_CONNECTED`, `PLAYER_READY`, `PLAYER_ZONE_CHANGE` y tráfico de apariencia.
 
-El actor remoto es una instancia nueva e independiente. El mod detiene su movimiento y BrainComponent, desactiva tick y colisión, aplica transforms de red y destruye solo ese actor al desconectar. No modifica companions reales de la partida.
+El actor remoto es una instancia nueva e independiente. El mod detiene su AI y BrainComponent, desactiva el tick del AIController y la colisión, pero mantiene SkeletalMesh, AnimBP y CharacterMovement activos. Aplica transforms de red y destruye solo ese actor al desconectar. No modifica companions reales de la partida.
+
+Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz 15`. Para la trayectoria vertical experimental usa `--jump-demo --snapshot-hz 15`; no se envían animaciones explícitas.
 
 ## Troubleshooting
 
@@ -90,7 +91,7 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su movimi
 
 ### `connection refused`
 
-- Arranca primero el servidor y confirma `READY ...:7777`.
+- Arranca primero el servidor y confirma `SERVER_READY ...:7777`.
 - Revisa `ServerHost` y `ServerPort` en `config/config.ini`.
 - Para otro PC, usa la IP LAN del servidor; no uses `127.0.0.1` fuera del mismo equipo.
 

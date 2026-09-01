@@ -145,6 +145,21 @@ auto call_vector_return(UObject* object, const std::string& function_name, FVect
     return true;
 }
 
+auto call_bool_return(UObject* object, const std::string& function_name, bool& result) -> bool
+{
+    if (!object_is_valid(object)) return false;
+    const auto wide_name = widen(function_name);
+    auto* function = object->GetFunctionByNameInChain(wide_name.c_str());
+    if (!function) return false;
+    struct Params
+    {
+        bool ReturnValue{};
+    } params;
+    object->ProcessEvent(function, &params);
+    result = params.ReturnValue;
+    return true;
+}
+
 auto normalized_object_path(std::string full_name) -> std::string
 {
     const auto space = full_name.find(' ');
@@ -308,6 +323,16 @@ auto GameBridge::tick() -> void
     in_bridge_tick = true;
     try
     {
+        const auto connected = network_.connected();
+        if (network_was_connected_ && !connected)
+        {
+            (void)network_.drain_incoming();
+            destroy_all_remotes();
+            local_player_id_ = 0;
+            resync_requested_ = true;
+            logger_.warning("CONNECTION_STATE_RESET remotes_destroyed=true reconnect_pending=true");
+        }
+        network_was_connected_ = connected;
         process_incoming();
         update_local_player();
         update_remote_players();
@@ -334,6 +359,7 @@ auto GameBridge::process_incoming() -> void
         {
         case protocol::MessageType::welcome:
         {
+            destroy_all_remotes();
             local_player_id_ = protocol::decode_welcome(frame.payload).player_id;
             resync_requested_ = true;
             logger_.info("WELCOME player_id=" + std::to_string(local_player_id_));
@@ -363,6 +389,10 @@ auto GameBridge::process_incoming() -> void
             const auto state = protocol::decode_appearance_state(frame.payload);
             if (state.player_id == local_player_id_) break;
             auto& remote = remotes_[state.player_id];
+            logger_.info("REMOTE_APPEARANCE_RECEIVED player=" + std::to_string(state.player_id) +
+                         " character=" + state.character_class +
+                         " outfit=" + state.outfit_mesh +
+                         " hair=" + state.hair_mesh);
             const auto old_character = remote.appearance
                                            ? class_leaf(remote.appearance->character_class)
                                            : std::string{};
@@ -374,6 +404,7 @@ auto GameBridge::process_incoming() -> void
                 if (object_is_valid(remote.actor)) remote.actor->K2_DestroyActor();
                 remote.actor = nullptr;
                 remote.movement_component = nullptr;
+                remote.character_respawn_pending = true;
             }
             remote.appearance = state;
             remote.appearance_dirty = true;
@@ -560,7 +591,7 @@ auto GameBridge::update_remote_players() -> void
     {
         if (remote.zone != local_zone_ || remote.snapshots.empty()) continue;
         if (!ensure_remote_actor(player_id, remote)) continue;
-        if (remote.appearance_dirty) apply_remote_appearance(remote);
+        if (remote.appearance_dirty) apply_remote_appearance(player_id, remote);
         apply_remote_transform(player_id, remote);
     }
 }
@@ -742,6 +773,13 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id, RemotePlayer& remo
                                                             : nullptr));
     remote.appearance_dirty = true;
     logger_.info("REMOTE_SPAWNED player=" + std::to_string(player_id) + " actor=" + object_name(remote.actor));
+    if (remote.character_respawn_pending)
+    {
+        remote.character_respawn_pending = false;
+        logger_.info("REMOTE_CHARACTER_RESPAWN player=" + std::to_string(player_id) +
+                     " character=" + (remote.appearance ? remote.appearance->character_class : "Unknown") +
+                     " actor=" + object_name(remote.actor));
+    }
     return remote.actor;
 }
 
@@ -798,6 +836,8 @@ auto GameBridge::apply_remote_transform(std::uint64_t player_id, RemotePlayer& r
             if (auto* observed = vector_property(remote.movement_component, "Velocity")) observed_velocity = *observed;
         }
         const auto* movement_mode = byte_property(remote.movement_component, "MovementMode");
+        bool is_falling{};
+        const auto has_is_falling = call_bool_return(remote.movement_component, "IsFalling", is_falling);
         logger_.info("REMOTE_MOTION player=" + std::to_string(player_id) +
                      " speed=" + std::to_string(speed) +
                      " velocity=" + std::to_string(velocity_x) + "," +
@@ -806,7 +846,8 @@ auto GameBridge::apply_remote_transform(std::uint64_t player_id, RemotePlayer& r
                      " observed=" + std::to_string(observed_velocity.X()) + "," +
                                     std::to_string(observed_velocity.Y()) + "," +
                                     std::to_string(observed_velocity.Z()) +
-                     " movement_mode=" + (movement_mode ? std::to_string(*movement_mode) : "unavailable"));
+                     " movement_mode=" + (movement_mode ? std::to_string(*movement_mode) : "unavailable") +
+                     " is_falling=" + (has_is_falling ? (is_falling ? "true" : "false") : "unavailable"));
     }
 
     if (now >= remote.next_interpolation_log)
@@ -825,24 +866,50 @@ auto GameBridge::apply_remote_transform(std::uint64_t player_id, RemotePlayer& r
     }
 }
 
-auto GameBridge::apply_remote_appearance(RemotePlayer& remote) -> void
+auto GameBridge::apply_remote_appearance(std::uint64_t player_id, RemotePlayer& remote) -> void
 {
     if (!object_is_valid(remote.actor) || !remote.appearance) return;
-    auto* body_component = object_property(remote.actor, config_.body_component_property);
-    auto* hair_component = object_property(remote.actor, config_.hair_component_property);
+    auto* body_component = find_owned_skeletal_component(remote.actor, config_.body_component_property);
+    auto* hair_component = find_owned_skeletal_component(remote.actor, config_.hair_component_property);
+    logger_.info("REMOTE_BODY_COMPONENT player=" + std::to_string(player_id) +
+                 " component=" + (object_is_valid(body_component) ? object_name(body_component) : "nil"));
+    logger_.info("REMOTE_HAIR_COMPONENT player=" + std::to_string(player_id) +
+                 " component=" + (object_is_valid(hair_component) ? object_name(hair_component) : "nil"));
     bool changed{};
     if (auto* body_mesh = resolve_object(remote.appearance->outfit_mesh))
     {
-        changed |= set_object_property(body_component, config_.mesh_asset_property, body_mesh);
-        call_no_args(body_component, "MarkRenderStateDirty");
+        if (set_object_property(body_component, config_.mesh_asset_property, body_mesh))
+        {
+            changed = true;
+            call_no_args(body_component, "MarkRenderStateDirty");
+            logger_.info("REMOTE_OUTFIT_APPLIED player=" + std::to_string(player_id) +
+                         " mesh=" + object_name(body_mesh));
+        }
+        else logger_.warning("REMOTE_OUTFIT_FAIL_OPEN player=" + std::to_string(player_id) +
+                             " reason=Body_component_not_ready");
     }
+    else if (!remote.appearance->outfit_mesh.empty())
+        logger_.warning("REMOTE_OUTFIT_FAIL_OPEN player=" + std::to_string(player_id) +
+                        " reason=asset_not_loaded mesh=" + remote.appearance->outfit_mesh);
     if (auto* hair_mesh = resolve_object(remote.appearance->hair_mesh))
     {
-        changed |= set_object_property(hair_component, config_.mesh_asset_property, hair_mesh);
-        call_no_args(hair_component, "MarkRenderStateDirty");
+        if (set_object_property(hair_component, config_.mesh_asset_property, hair_mesh))
+        {
+            changed = true;
+            call_no_args(hair_component, "MarkRenderStateDirty");
+            logger_.info("REMOTE_HAIR_APPLIED player=" + std::to_string(player_id) +
+                         " mesh=" + object_name(hair_mesh));
+        }
+        else logger_.warning("REMOTE_HAIR_FAIL_OPEN player=" + std::to_string(player_id) +
+                             " reason=Haircut_SkeletalMesh_component_not_ready");
     }
+    else if (!remote.appearance->hair_mesh.empty())
+        logger_.warning("REMOTE_HAIR_FAIL_OPEN player=" + std::to_string(player_id) +
+                        " reason=asset_not_loaded mesh=" + remote.appearance->hair_mesh);
     remote.appearance_dirty = false;
-    if (changed) logger_.info("REMOTE_APPEARANCE_APPLIED actor=" + object_name(remote.actor));
+    logger_.info("REMOTE_APPEARANCE_APPLIED player=" + std::to_string(player_id) +
+                 " changed=" + (changed ? "true" : "false") +
+                 " actor=" + object_name(remote.actor));
 }
 
 auto GameBridge::disable_remote_ai(AActor* actor) -> void

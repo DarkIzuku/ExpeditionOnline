@@ -137,4 +137,6 @@ class FrameDecoder
 };
 
 auto message_type_name(MessageType type) -> const char*;
+auto is_known_message_type(MessageType type) noexcept -> bool;
+auto is_empty_payload_message(MessageType type) noexcept -> bool;
 } // namespace expedition_online::protocol

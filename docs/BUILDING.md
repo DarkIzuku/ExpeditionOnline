@@ -1,6 +1,8 @@
 # Build reproducible en Windows
 
-El workflow `Build Windows x64` compila servidor y probe en `Release x64`, ejecuta los tests y la integración, y compila `main.dll` como mod C++ dentro del árbol oficial de UE4SS en modo `Game__Shipping__Win64` (su configuración Release/Shipping compatible con ABI).
+El workflow `Build Windows x64` compila servidor, Probe, SelfTest y Doctor en `Release x64`, ejecuta unitarios e integración (relay, zonas, late join, reconnect, timeout, cliente malformado y demos) y compila `main.dll` como mod C++ dentro del árbol oficial de UE4SS en modo `Game__Shipping__Win64`.
+
+Al quedar verde publica tres artifacts: desarrollo completo, Host y Client.
 
 ## Revisión fijada
 
@@ -29,6 +31,7 @@ Servidor, probe y tests:
 ```powershell
 .\scripts\build-server.ps1 -Configuration Release
 .\scripts\test-relay.ps1 -Configuration Release
+.\scripts\test-self.ps1 -Configuration Release
 ```
 
 Cliente UE4SS, usando un checkout oficial completo en la revisión fijada:

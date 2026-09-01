@@ -26,6 +26,8 @@ The MVP uses one TCP stream per client. Every integer and float is encoded in ne
 
 Client-supplied player ids are never trusted. The server overwrites them with the id assigned to that connection. State is relayed only to sessions whose latest `ZoneState.zone` is identical. On entry into a zone, the server sends cached zone, appearance, and latest transform state so late joiners can create existing remote players.
 
+Both sides send lightweight heartbeats. Defaults are a 5-second interval and a 15-second inactivity timeout. The server also rejects oversized frames, unknown/server-only client messages, malformed or truncated payloads, non-finite transforms, messages before `Hello`, and basic per-client floods. Only the offending connection is removed.
+
 No story, quest, inventory, save, combat, damage, or PvP data exists in protocol v2.
 
 ## UDP extension point

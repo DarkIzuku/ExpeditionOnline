@@ -15,6 +15,8 @@ struct ClientConfig
     int reconnect_delay_ms{2000};
     int snapshot_hz{15};
     int interpolation_delay_ms{100};
+    int heartbeat_interval_seconds{5};
+    int server_timeout_seconds{15};
 
     std::string controller_class{"BP_jRPG_Controller_World_C"};
     std::string pawn_property{"Pawn"};

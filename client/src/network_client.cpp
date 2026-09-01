@@ -1,4 +1,5 @@
 #include <expedition_online/client/network_client.hpp>
+#include <expedition_online/build_info.hpp>
 
 #include <algorithm>
 #include <array>
@@ -115,13 +116,17 @@ auto NetworkClient::run_connection(net::SocketHandle socket) -> void
     std::string error;
     const auto hello = protocol::make_frame(protocol::MessageType::hello,
                                             next_sequence(),
-                                            protocol::Hello{config_.player_name, "ExpeditionOnline-0.1.0"});
+                                            protocol::Hello{config_.player_name,
+                                                            build_info::identity("Client",
+                                                                                 protocol::kProtocolVersion)});
     const auto hello_bytes = protocol::encode_frame(hello);
     if (!net::send_all(socket, hello_bytes, error)) throw std::runtime_error(error);
 
     protocol::FrameDecoder decoder;
     std::array<std::uint8_t, 64U * 1024U> buffer{};
     bool welcomed{};
+    auto last_received = std::chrono::steady_clock::now();
+    auto next_heartbeat = last_received + std::chrono::seconds(config_.heartbeat_interval_seconds);
     while (!stopping_)
     {
         if (welcomed)
@@ -131,25 +136,68 @@ auto NetworkClient::run_connection(net::SocketHandle socket) -> void
                 const auto bytes = protocol::encode_frame(frame);
                 if (!net::send_all(socket, bytes, error)) throw std::runtime_error(error);
             }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_heartbeat)
+            {
+                const auto ping = protocol::Frame{protocol::kProtocolVersion,
+                                                  protocol::MessageType::ping,
+                                                  next_sequence(),
+                                                  {}};
+                const auto bytes = protocol::encode_frame(ping);
+                if (!net::send_all(socket, bytes, error)) throw std::runtime_error(error);
+                next_heartbeat = now + std::chrono::seconds(config_.heartbeat_interval_seconds);
+            }
+            if (now - last_received > std::chrono::seconds(config_.server_timeout_seconds))
+            {
+                throw std::runtime_error("SERVER_TIMEOUT no data for " +
+                                         std::to_string(config_.server_timeout_seconds) + " seconds");
+            }
         }
 
         if (net::wait_readable(socket, 25, error))
         {
             const auto received = net::receive_some(socket, buffer, error);
             if (received <= 0) throw std::runtime_error(error);
+            last_received = std::chrono::steady_clock::now();
             decoder.push(std::span<const std::uint8_t>(buffer.data(), static_cast<std::size_t>(received)));
             for (auto& frame : decoder.take_frames())
             {
                 if (frame.version != protocol::kProtocolVersion)
                 {
+                    logger_.error("PROTOCOL_MISMATCH client=" + std::to_string(protocol::kProtocolVersion) +
+                                  " server=" + std::to_string(frame.version));
                     throw std::runtime_error("server protocol version mismatch");
+                }
+                if (!protocol::is_known_message_type(frame.type))
+                {
+                    throw std::runtime_error("server sent an unknown message type");
+                }
+                if (protocol::is_empty_payload_message(frame.type) && !frame.payload.empty())
+                {
+                    throw std::runtime_error("server sent a malformed heartbeat");
+                }
+                if (frame.type == protocol::MessageType::ping)
+                {
+                    const auto pong = protocol::Frame{protocol::kProtocolVersion,
+                                                      protocol::MessageType::pong,
+                                                      frame.sequence,
+                                                      {}};
+                    const auto bytes = protocol::encode_frame(pong);
+                    if (!net::send_all(socket, bytes, error)) throw std::runtime_error(error);
+                    continue;
+                }
+                if (frame.type == protocol::MessageType::pong)
+                {
+                    continue;
                 }
                 if (frame.type == protocol::MessageType::welcome)
                 {
                     welcomed = true;
                     connected_ = true;
                     const auto welcome = protocol::decode_welcome(frame.payload);
-                    logger_.info("CONNECTED player_id=" + std::to_string(welcome.player_id));
+                    logger_.info("CONNECTED player_id=" + std::to_string(welcome.player_id) + " " +
+                                 build_info::identity("Client", protocol::kProtocolVersion));
                 }
                 push_incoming(std::move(frame));
             }

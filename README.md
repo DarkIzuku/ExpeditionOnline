@@ -1,5 +1,9 @@
 # ExpeditionOnline
 
+Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.3.0-rc1` release candidate focuses on easy installation, smooth same-zone movement, appearance, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
+
+Normal users should start with [client quick start](docs/QUICK_START_CLIENT.md) or [host quick start](docs/QUICK_START_HOST.md). Technical scope, verified companions and remaining limitations are in [Exploration RC](docs/EXPLORATION_RC.md).
+
 MVP experimental de cooperación online en exploración para **Clair Obscur: Expedition 33**, construido como mod C++ nativo de UE4SS y relay C++ independiente.
 
 La historia, las quests, el inventario y los archivos de save permanecen totalmente locales. No hay combate cooperativo ni PvP.

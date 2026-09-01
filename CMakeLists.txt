@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ExpeditionOnline VERSION 0.2.0 LANGUAGES CXX)
+project(ExpeditionOnline VERSION 0.3.0 LANGUAGES CXX)
 
 option(EXPEDITION_BUILD_SERVER "Build ExpeditionOnlineServer" ON)
 option(EXPEDITION_BUILD_CLIENT "Build the UE4SS native client mod" OFF)
 option(EXPEDITION_BUILD_PROBE "Build the protocol probe client" ON)
 option(EXPEDITION_BUILD_TESTS "Build protocol tests" ON)
+option(EXPEDITION_BUILD_TOOLS "Build self-test and diagnostic tools" ON)
+set(EXPEDITION_BUILD_COMMIT "unknown" CACHE STRING "Source commit shown in build diagnostics")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +19,11 @@ add_library(ExpeditionOnlineProtocol STATIC
     shared/src/socket.cpp
 )
 target_include_directories(ExpeditionOnlineProtocol PUBLIC shared/include)
-target_compile_definitions(ExpeditionOnlineProtocol PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(ExpeditionOnlineProtocol PUBLIC
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    EXPEDITION_BUILD_COMMIT="${EXPEDITION_BUILD_COMMIT}"
+)
 if(WIN32)
     target_link_libraries(ExpeditionOnlineProtocol PUBLIC ws2_32)
 endif()
@@ -34,6 +40,11 @@ endif()
 
 if(EXPEDITION_BUILD_PROBE)
     add_subdirectory(tools/probe)
+endif()
+
+if(EXPEDITION_BUILD_TOOLS)
+    add_subdirectory(tools/self_test)
+    add_subdirectory(tools/doctor)
 endif()
 
 if(EXPEDITION_BUILD_TESTS)

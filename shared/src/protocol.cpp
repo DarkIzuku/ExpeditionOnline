@@ -395,4 +395,27 @@ auto message_type_name(MessageType type) -> const char*
     default: return "Unknown";
     }
 }
+
+auto is_known_message_type(MessageType type) noexcept -> bool
+{
+    switch (type)
+    {
+    case MessageType::hello:
+    case MessageType::welcome:
+    case MessageType::zone_state:
+    case MessageType::appearance_state:
+    case MessageType::transform_snapshot:
+    case MessageType::player_left:
+    case MessageType::error:
+    case MessageType::ping:
+    case MessageType::pong:
+    case MessageType::player_joined: return true;
+    default: return false;
+    }
+}
+
+auto is_empty_payload_message(MessageType type) noexcept -> bool
+{
+    return type == MessageType::ping || type == MessageType::pong;
+}
 } // namespace expedition_online::protocol
