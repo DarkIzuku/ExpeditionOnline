@@ -137,6 +137,13 @@ auto select_effective_appearance(const std::optional<protocol::AppearanceState>&
     return last_valid;
 }
 
+auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int
+{
+    if (consecutive_failures <= 2) return 500;
+    if (consecutive_failures <= 5) return 1000;
+    return 2000;
+}
+
 auto score_appearance_candidate(const AppearanceCandidate& candidate) -> int
 {
     if (candidate.component_leaf != "Body" || candidate.mesh_full_name.empty()) return -1;
@@ -153,5 +160,22 @@ auto score_appearance_candidate(const AppearanceCandidate& candidate) -> int
     if (candidate.directly_owned_by_pawn) score += 30;
     if (candidate.owner_is_character_skin && candidate.related_to_pawn) score += 40;
     return score;
+}
+
+auto select_appearance_candidate(const std::vector<AppearanceCandidate>& candidates)
+    -> std::optional<std::size_t>
+{
+    std::optional<std::size_t> best_index;
+    int best_score{-1};
+    for (std::size_t index = 0; index < candidates.size(); ++index)
+    {
+        const auto score = score_appearance_candidate(candidates[index]);
+        if (score >= 0 && score >= best_score)
+        {
+            best_index = index;
+            best_score = score;
+        }
+    }
+    return best_index;
 }
 } // namespace expedition_online::client_logic

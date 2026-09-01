@@ -200,17 +200,6 @@ auto is_instance_of(UObject* object, const wchar_t* class_path, std::string_view
     return object_is_valid(object_class) && object_name(object_class).find(class_name_fallback) != std::string::npos;
 }
 
-auto is_owned_by(UObject* object, UObject* expected_owner) -> bool
-{
-    if (!object_is_valid(object) || !object_is_valid(expected_owner)) return false;
-    if (auto* reported_owner = call_object_return(object, "GetOwner")) return reported_owner == expected_owner;
-    for (auto* outer = object->GetOuterPrivate(); object_is_valid(outer); outer = outer->GetOuterPrivate())
-    {
-        if (outer == expected_owner) return true;
-    }
-    return false;
-}
-
 auto find_remote_movement_component(AActor* owner) -> UObject*
 {
     if (!object_is_valid(owner)) return nullptr;
@@ -220,12 +209,13 @@ auto find_remote_movement_component(AActor* owner) -> UObject*
     component = object_property(owner, "MovementComponent");
     if (is_instance_of(component, L"/Script/Engine.MovementComponent", "MovementComponent")) return component;
 
-    std::vector<UObject*> components;
-    UObjectGlobals::FindAllOf(L"CharacterMovementComponent", components);
+    auto* movement_component_class = UObjectGlobals::StaticFindObject<UClass*>(
+        nullptr, nullptr, L"/Script/Engine.CharacterMovementComponent");
+    if (!object_is_valid(movement_component_class)) return nullptr;
+    const auto& components = owner->K2_GetComponentsByClass(movement_component_class);
     for (auto* candidate : components)
     {
-        if (is_owned_by(candidate, owner) &&
-            is_instance_of(candidate, L"/Script/Engine.CharacterMovementComponent", "CharacterMovementComponent"))
+        if (is_instance_of(candidate, L"/Script/Engine.CharacterMovementComponent", "CharacterMovementComponent"))
         {
             return candidate;
         }
@@ -241,12 +231,13 @@ auto horizontal_speed(float x, float y, float z) -> float
 auto find_owned_skeletal_component(AActor* owner, const std::string& component_name) -> UObject*
 {
     if (!object_is_valid(owner)) return nullptr;
-    std::vector<UObject*> components;
-    UObjectGlobals::FindAllOf(L"SkeletalMeshComponent", components);
+    auto* skeletal_mesh_component_class = UObjectGlobals::StaticFindObject<UClass*>(
+        nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+    if (!object_is_valid(skeletal_mesh_component_class)) return nullptr;
+    const auto& components = owner->K2_GetComponentsByClass(skeletal_mesh_component_class);
     for (auto* component : components)
     {
-        if (is_skeletal_mesh_component(component) && is_owned_by(component, owner) &&
-            object_leaf_name(component) == component_name)
+        if (is_skeletal_mesh_component(component) && object_leaf_name(component) == component_name)
         {
             return component;
         }
@@ -254,94 +245,45 @@ auto find_owned_skeletal_component(AActor* owner, const std::string& component_n
     return nullptr;
 }
 
-auto contains_character_skin(UObject* object) -> bool
-{
-    if (!object_is_valid(object)) return false;
-    const auto signature = object_name(object) + ' ' + object_name(object->GetClassPrivate());
-    return signature.find("BP_CharacterSkin_") != std::string::npos;
-}
-
-auto is_related_to_pawn(UObject* object, AActor* pawn) -> bool
-{
-    if (!object_is_valid(object) || !object_is_valid(pawn)) return false;
-    std::vector<UObject*> pending{object};
-    std::vector<UObject*> visited;
-    for (std::size_t index = 0; index < pending.size() && index < 24; ++index)
-    {
-        auto* current = pending[index];
-        if (!object_is_valid(current)) continue;
-        if (current == pawn) return true;
-        if (std::find(visited.begin(), visited.end(), current) != visited.end()) continue;
-        visited.push_back(current);
-
-        const auto enqueue = [&](UObject* candidate) {
-            if (object_is_valid(candidate) &&
-                std::find(visited.begin(), visited.end(), candidate) == visited.end())
-            {
-                pending.push_back(candidate);
-            }
-        };
-        enqueue(call_object_return(current, "GetAttachParentActor"));
-        enqueue(call_object_return(current, "GetOwner"));
-        enqueue(current->GetOuterPrivate());
-    }
-    return false;
-}
-
 struct BodySelection
 {
     UObject* component{};
     UObject* mesh{};
-    int score{-1};
+    std::size_t candidates{};
 };
 
 auto select_body_component(AActor* pawn) -> BodySelection
 {
-    BodySelection direct;
-    BodySelection related_skin;
-    if (!object_is_valid(pawn)) return direct;
+    BodySelection selection;
+    if (!object_is_valid(pawn)) return selection;
+    auto* skeletal_mesh_component_class = UObjectGlobals::StaticFindObject<UClass*>(
+        nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+    if (!object_is_valid(skeletal_mesh_component_class)) return selection;
 
-    std::vector<UObject*> components;
-    UObjectGlobals::FindAllOf(L"SkeletalMeshComponent", components);
+    const auto& components = pawn->K2_GetComponentsByClass(skeletal_mesh_component_class);
+    std::vector<UObject*> component_objects;
+    std::vector<logic::AppearanceCandidate> candidates;
     for (auto* component : components)
     {
-        if (!is_skeletal_mesh_component(component) || object_leaf_name(component) != "Body") continue;
+        ++selection.candidates;
+        if (!is_skeletal_mesh_component(component)) continue;
         auto* mesh = object_property(component, "SkeletalMesh");
-        auto* visual_owner = call_object_return(component, "GetOwner");
-        if (!object_is_valid(visual_owner))
-        {
-            for (auto* outer = component->GetOuterPrivate(); object_is_valid(outer); outer = outer->GetOuterPrivate())
-            {
-                if (outer == pawn || contains_character_skin(outer))
-                {
-                    visual_owner = outer;
-                    break;
-                }
-            }
-        }
-
         logic::AppearanceCandidate candidate;
         candidate.component_leaf = object_leaf_name(component);
         candidate.component_full_name = object_name(component);
-        candidate.owner_full_name = object_name(visual_owner);
+        candidate.owner_full_name = object_name(pawn);
         candidate.mesh_full_name = object_name(mesh);
-        candidate.directly_owned_by_pawn = visual_owner == pawn || is_owned_by(component, pawn);
-        candidate.owner_is_character_skin = contains_character_skin(visual_owner);
-        candidate.related_to_pawn = candidate.directly_owned_by_pawn ||
-                                    (candidate.owner_is_character_skin && is_related_to_pawn(visual_owner, pawn));
-        const auto score = logic::score_appearance_candidate(candidate);
-        auto& best = candidate.directly_owned_by_pawn ? direct : related_skin;
-        // FindAllOf follows the UObject array; for equally valid skins prefer
-        // the later object, which is normally the replacement created during
-        // a character/outfit swap rather than the retiring visual actor.
-        if (score >= 0 && score >= best.score)
-        {
-            best = BodySelection{component, mesh, score};
-        }
+        candidate.directly_owned_by_pawn = true;
+        candidate.related_to_pawn = true;
+        component_objects.push_back(component);
+        candidates.push_back(std::move(candidate));
     }
-    // First use the Pawn's own Body. CharacterSkin actors are the validated
-    // fallback when the active visual has been split out during a skin swap.
-    return direct.score >= 0 ? direct : related_skin;
+
+    const auto selected = logic::select_appearance_candidate(candidates);
+    if (!selected) return selection;
+    selection.component = component_objects[*selected];
+    selection.mesh = object_property(selection.component, "SkeletalMesh");
+    return selection;
 }
 
 } // namespace
@@ -541,21 +483,33 @@ auto GameBridge::update_local_player() -> void
     }
 
     const auto now = std::chrono::steady_clock::now();
-    bool appearance_changed{};
-    if (!local_appearance_ || now >= next_appearance_capture_)
+    if (local_visual_pawn_ != pawn)
     {
-        next_appearance_capture_ = now + std::chrono::seconds(1);
+        appearance_failure_count_ = 0;
+        next_appearance_capture_ = {};
+    }
+    bool appearance_changed{};
+    if (now >= next_appearance_capture_)
+    {
         const auto candidate = capture_appearance(pawn);
         const auto effective = logic::select_effective_appearance(local_appearance_, candidate);
         if (logic::appearance_is_ready(candidate))
         {
+            appearance_failure_count_ = 0;
+            next_appearance_capture_ = now + std::chrono::seconds(1);
             appearance_changed = !local_appearance_ || !same_appearance(*local_appearance_, candidate);
             local_appearance_ = effective;
         }
-        else if (now >= next_appearance_pending_log_)
+        else
         {
-            next_appearance_pending_log_ = now + std::chrono::seconds(2);
-            logger_.info("LOCAL_APPEARANCE_PENDING reason=body_not_ready");
+            ++appearance_failure_count_;
+            next_appearance_capture_ = now + std::chrono::milliseconds(
+                logic::appearance_retry_delay_ms(appearance_failure_count_));
+            if (now >= next_appearance_pending_log_)
+            {
+                next_appearance_pending_log_ = now + std::chrono::seconds(2);
+                logger_.info("LOCAL_APPEARANCE_PENDING reason=body_not_ready");
+            }
         }
     }
     if (network_.connected() && local_appearance_ && (resync_requested_ || appearance_changed))
@@ -629,6 +583,7 @@ auto GameBridge::current_zone(AActor* pawn) -> std::string
 
 auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
 {
+    const auto scan_started = std::chrono::steady_clock::now();
     if (local_visual_pawn_ != pawn)
     {
         local_visual_pawn_ = pawn;
@@ -639,9 +594,8 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
         body_diagnostic_initialized_ = false;
     }
 
-    // Re-resolve Body on every capture. Character/outfit changes can leave a
-    // reachable UObject behind while its component has stopped representing
-    // the active visual. Pawn.Mesh/CharacterMesh0 (SKM_Quinn) is never used.
+    // This is intentionally bounded to components owned by the local Pawn.
+    // Global UObject scans during level streaming can stall the game thread.
     const auto body_selection = select_body_component(pawn);
     local_body_component_ = body_selection.component;
     if (!object_is_valid(local_hair_component_))
@@ -672,6 +626,25 @@ auto GameBridge::capture_appearance(AActor* pawn) -> protocol::AppearanceState
         last_body_mesh_log_ = body_mesh_log;
     }
     body_diagnostic_initialized_ = true;
+
+    const auto scan_finished = std::chrono::steady_clock::now();
+    const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                 scan_finished - scan_started).count();
+    if (scan_finished >= next_appearance_scan_log_)
+    {
+        next_appearance_scan_log_ = scan_finished + std::chrono::seconds(2);
+        const auto message = "APPEARANCE_SCAN duration_us=" + std::to_string(duration_us) +
+                             " candidates=" + std::to_string(body_selection.candidates) +
+                             " source=" + (object_is_valid(body_selection.component) ? "pawn" : "none");
+        if (duration_us > 5000)
+        {
+            logger_.warning(message);
+        }
+        else
+        {
+            logger_.info(message);
+        }
+    }
     return appearance;
 }
 

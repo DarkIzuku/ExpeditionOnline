@@ -23,7 +23,7 @@ En exploración, el cliente usa la arquitectura validada:
 - Controller: `BP_jRPG_Controller_World_C`.
 - Pawn local: `BP_jRPG_Character_World_C`.
 - Visual remoto: un actor nuevo `BP_Pawn_AICompanion_*_C`.
-- Apariencia: el cuerpo se obtiene exclusivamente de un `SkeletalMeshComponent` exacto `Body`, owned por el Pawn o por un actor visual relacionado `BP_CharacterSkin_*`; se ignora `Pawn.Mesh`/`CharacterMesh0` porque contiene `SKM_Quinn`. Cada captura revalida el candidato y conserva la última apariencia válida durante cambios transitorios. El pelo se lee de `Haircut_SkeletalMesh`.
+- Apariencia: el cuerpo se obtiene exclusivamente de los componentes del Pawn mediante `K2_GetComponentsByClass`, buscando un `SkeletalMeshComponent` exacto `Body`; no se realizan scans globales de UObjects. Se ignora `Pawn.Mesh`/`CharacterMesh0` porque contiene `SKM_Quinn`, y se conserva la última apariencia válida mientras el Body no esté listo. El pelo se lee de `Haircut_SkeletalMesh`.
 - Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
 - El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
 - La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto; no se envían paquetes de animación.
@@ -31,6 +31,8 @@ En exploración, el cliente usa la arquitectura validada:
 Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan el tick del AIController y la colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. El actor, su SkeletalMesh, AnimBP y CharacterMovement siguen actualizándose. No se reutiliza ni altera un companion real.
 
 Cuando `PlayerController.Pawn` es `null`, el cliente considera que la exploración no está disponible y elimina sus remotos. Esto evita interferir con combate.
+
+La captura de apariencia es opcional y usa backoff de 500 ms, 1 s y 2 s durante carga. La detección de Bodies alojados únicamente en actores `BP_CharacterSkin_*` queda temporalmente pospuesta hasta poder alcanzarlos mediante una relación directa y acotada desde el Pawn.
 
 ## Build y CI
 

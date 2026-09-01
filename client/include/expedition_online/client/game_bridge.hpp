@@ -80,12 +80,14 @@ class GameBridge
     std::string last_body_component_log_;
     std::string last_body_mesh_log_;
     bool body_diagnostic_initialized_{};
+    std::size_t appearance_failure_count_{};
     bool resync_requested_{};
     bool exploration_available_{};
     bool shutdown_{};
     std::chrono::steady_clock::time_point next_bridge_tick_{};
     std::chrono::steady_clock::time_point next_appearance_capture_{};
     std::chrono::steady_clock::time_point next_appearance_pending_log_{};
+    std::chrono::steady_clock::time_point next_appearance_scan_log_{};
     std::chrono::steady_clock::time_point next_snapshot_{};
     std::chrono::steady_clock::time_point next_local_transform_log_{};
 };

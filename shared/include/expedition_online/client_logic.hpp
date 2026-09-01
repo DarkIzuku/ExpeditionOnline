@@ -7,6 +7,7 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace expedition_online::client_logic
 {
@@ -34,6 +35,7 @@ auto appearance_is_ready(const protocol::AppearanceState& appearance) -> bool;
 auto select_effective_appearance(const std::optional<protocol::AppearanceState>& last_valid,
                                  const protocol::AppearanceState& candidate)
     -> std::optional<protocol::AppearanceState>;
+auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int;
 
 struct AppearanceCandidate
 {
@@ -48,4 +50,6 @@ struct AppearanceCandidate
 
 // Negative means the candidate is not safe to publish as the current Body.
 auto score_appearance_candidate(const AppearanceCandidate& candidate) -> int;
+auto select_appearance_candidate(const std::vector<AppearanceCandidate>& candidates)
+    -> std::optional<std::size_t>;
 } // namespace expedition_online::client_logic

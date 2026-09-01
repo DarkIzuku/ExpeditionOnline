@@ -110,12 +110,13 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su movimi
 - Busca `REMOTE_SPAWN_WAIT` o `REMOTE_SPAWN_FAILED`; indican que la clase companion no está cargada o no coincide con el mapping.
 - Prueba en exploración. Durante combate `PlayerController.Pawn` puede ser `null` y esta versión elimina los remotos deliberadamente.
 
-### La apariencia tarda en estar lista o cambia de personaje
+### La apariencia tarda en estar lista
 
-- La identidad se infiere únicamente del `SkeletalMesh` de un componente exacto `Body`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo. El componente puede pertenecer al Pawn o a un actor visual relacionado `BP_CharacterSkin_*`.
+- La identidad se infiere únicamente del `SkeletalMesh` de un componente exacto `Body` enumerado desde el Pawn con `K2_GetComponentsByClass`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo.
 - Busca `APPEARANCE_BODY_COMPONENT component=...Body` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
 - Mientras Unreal reconstruye el skin puede aparecer `LOCAL_APPEARANCE_PENDING reason=body_not_ready`; el cliente conserva la última apariencia válida y no envía `Unknown`.
-- Tras un cambio Lune -> Sciel, el log debe publicar un nuevo `LOCAL_APPEARANCE character=Sciel ...` cuando el nuevo Body esté listo.
+- `APPEARANCE_SCAN duration_us=... candidates=... source=pawn|none` debe permanecer muy por debajo de 5000 microsegundos. Un scan superior a 5 ms se registra como warning.
+- En esta build de seguridad no se buscan globalmente actores `BP_CharacterSkin_*`. Un cambio cuyo Body exista solo en un actor visual separado puede conservar temporalmente la apariencia anterior hasta implementar una ruta directa y acotada desde el Pawn.
 - Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
 
 ### El remoto se mueve a tirones

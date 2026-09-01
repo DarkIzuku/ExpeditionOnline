@@ -164,6 +164,11 @@ auto test_appearance_selection() -> void
     unrelated.related_to_pawn = false;
     check(logic::score_appearance_candidate(unrelated) < 0, "unrelated skin rejected");
 
+    check(!logic::select_appearance_candidate({}), "empty bounded component set is immediately not ready");
+    const std::vector<logic::AppearanceCandidate> bounded_candidates{quinn, direct};
+    const auto selected = logic::select_appearance_candidate(bounded_candidates);
+    check(selected && *selected == 1, "bounded component resolver selects valid Body");
+
     const proto::AppearanceState valid{1, "Lune", direct.mesh_full_name, "/Game/Characters/Hair/LuneHair"};
     const proto::AppearanceState pending{1, "Unknown", "", "/Game/Characters/Hair/ScielHair"};
     const auto retained = logic::select_effective_appearance(valid, pending);
@@ -171,6 +176,13 @@ auto test_appearance_selection() -> void
           "pending Unknown does not replace last valid appearance");
     check(!logic::select_effective_appearance(std::nullopt, pending),
           "initial Unknown remains pending");
+
+    check(logic::appearance_retry_delay_ms(1) == 500 && logic::appearance_retry_delay_ms(2) == 500,
+          "initial appearance retry delay");
+    check(logic::appearance_retry_delay_ms(3) == 1000 && logic::appearance_retry_delay_ms(5) == 1000,
+          "middle appearance retry delay");
+    check(logic::appearance_retry_delay_ms(6) == 2000 && logic::appearance_retry_delay_ms(100) == 2000,
+          "appearance retry delay backoff cap");
 }
 } // namespace
 
