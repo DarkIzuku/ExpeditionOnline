@@ -19,11 +19,13 @@ No unverified Blueprint class is invented. When a character has no mapping, the 
 
 - Idle, Walk and Run are produced by the existing companion AnimBP from `CharacterMovement.Velocity`; no animation packets are sent.
 - Interpolation is applied every GameBridge tick. Use 100–150 ms at the normal 15 Hz snapshot rate and 300 ms for Probe at 4 Hz.
-- Jump/Fall/Land is experimental. `--jump-demo` supplies a physical vertical trajectory and velocity, while logs report `movement_mode` and `is_falling`. The RC does not force a movement mode until a real game test proves it is required.
+- Jump/Fall/Land is an instrumentation experiment. Runtime proved that vertical position and `Velocity.Z` alone leave the remote in idle with `is_falling=false`. This build logs `LOCAL_MOVEMENT_STATE` only when the real local state changes, including Ground/Ascend/Apex/Descend/Land phases. It deliberately does not write numeric MovementMode values or add a MovementState packet until those local values are captured.
 
 ## Appearance and character changes
 
-Remote outfit and hair use only actor-bounded `K2_GetComponentsByClass` enumeration. Exact component names are `Body` and `Haircut_SkeletalMesh`. Missing or not-yet-loaded assets are fail-open: the remote remains usable and the log explains what could not be applied.
+The Probe accepts literal `--character`, `--outfit` and `--hair` values copied from `LOCAL_APPEARANCE`. Remote outfit and hair use only actor-bounded `K2_GetComponentsByClass` enumeration. Exact component names are `Body` and `Haircut_SkeletalMesh`.
+
+If `Body` is not owned directly by the Pawn, discovery follows only bounded relationships reachable from that Pawn: candidate visual object properties, `ChildActorComponent`, attached actors and child actors. It prefers an exact `Body` on `BP_CharacterSkin_*`. A once-per-spawn `REMOTE_SKELETAL_COMPONENT` inventory records leaf, full name and current mesh. Component or asset loading is retried with 500/1000/2000 ms backoff for at most ten attempts, then fails open without removing the remote.
 
 Changing a verified character replaces only that remote visual actor. Player ID, zone, snapshot buffer, interpolated transform and connection are retained.
 

@@ -36,7 +36,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase
     ExpeditionOnlineMod()
     {
         ModName = STR("ExpeditionOnline");
-        ModVersion = STR("0.3.0-rc1");
+        ModVersion = STR("0.3.0-rc2");
         ModDescription = STR("Exploration-only online co-op relay prototype for Clair Obscur: Expedition 33");
         ModAuthors = STR("ExpeditionOnline contributors");
         RC::Output::send<RC::LogLevel::Verbose>(STR("[ExpeditionOnline] native mod loaded\n"));

@@ -56,7 +56,7 @@ jobs:
         shell: pwsh
         run: ctest --test-dir build/standalone --output-on-failure
 
-      - name: Run server and two-probe integration
+      - name: Run server, literal appearance and two-probe integration
         shell: pwsh
         run: .\scripts\test-relay.ps1 -Configuration Release -Port 27888 -BinDirectory build\standalone\bin
 

@@ -74,6 +74,14 @@ El actor remoto es una instancia nueva e independiente. El mod detiene su AI y B
 
 Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz 15`. Para la trayectoria vertical experimental usa `--jump-demo --snapshot-hz 15`; no se envían animaciones explícitas.
 
+Para probar apariencia remota real, copia literalmente `outfit=` y `hair=` de una línea `LOCAL_APPEARANCE` y pásalos entre comillas:
+
+```powershell
+ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name "Maelle Appearance Probe" --zone "<LOCAL_ZONE exacta>" --duration 60 --x <X> --y <Y> --z <Z> --yaw <YAW> --snapshot-hz 15 --character Maelle --outfit "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/SK_Maelle_Bikini_skin.SK_Maelle_Bikini_skin" --hair "<full UObject hair copiado de LOCAL_APPEARANCE>"
+```
+
+El Probe conserva esos tres valores literalmente en `AppearanceState`; no intenta interpretarlos ni sustituirlos.
+
 ## Troubleshooting
 
 ### `main.dll` no carga
@@ -116,8 +124,9 @@ Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz
 - La identidad se infiere únicamente del `SkeletalMesh` de un componente exacto `Body` enumerado desde el Pawn con `K2_GetComponentsByClass`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo.
 - Busca `APPEARANCE_BODY_COMPONENT component=...Body` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
 - Mientras Unreal reconstruye el skin puede aparecer `LOCAL_APPEARANCE_PENDING reason=body_not_ready`; el cliente conserva la última apariencia válida y no envía `Unknown`.
-- `APPEARANCE_SCAN duration_us=... candidates=... source=pawn|none` debe permanecer muy por debajo de 5000 microsegundos. Un scan superior a 5 ms se registra como warning.
-- En esta build de seguridad no se buscan globalmente actores `BP_CharacterSkin_*`. Un cambio cuyo Body exista solo en un actor visual separado puede conservar temporalmente la apariencia anterior hasta implementar una ruta directa y acotada desde el Pawn.
+- `APPEARANCE_SCAN duration_us=... candidates=... source=...` debe permanecer muy por debajo de 5000 microsegundos. Un scan superior a 5 ms se registra como warning.
+- Si el Body directo desaparece, busca `LOCAL_SKIN_PROPERTY`, `LOCAL_COMPONENT_DIAGNOSTIC`, `LOCAL_VISUAL_ROUTE` y `APPEARANCE_VISUAL_ROUTE`. La búsqueda sigue solamente relaciones alcanzables desde el Pawn y nunca hace un scan UObject global.
+- Para el remoto busca `REMOTE_VISUAL_ACTOR`, `REMOTE_SKELETAL_COMPONENT`, `REMOTE_APPEARANCE_RETRY`, `REMOTE_OUTFIT_APPLIED` y `REMOTE_HAIR_APPLIED`. El inventario se emite una vez por spawn; los reintentos terminan en fail-open.
 - Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
 
 ### El remoto se mueve a tirones
@@ -131,6 +140,12 @@ Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz
 - `REMOTE_MOTION_SETUP` debe mostrar un `CharacterMovementComponent` y la clase del `AnimInstance`.
 - Mientras el Probe recorre el círculo, `REMOTE_MOTION speed` debe estar cerca de `radius × angular-speed`; con los valores recomendados será aproximadamente 300.
 - `velocity` es el valor calculado y escrito; `observed` es lo que devuelve `GetVelocity` del actor. Si `velocity` es distinto de cero pero `observed` queda en cero o el AnimBP sigue en idle, conserva esas líneas junto con `movement_mode` para la siguiente iteración.
+
+### El salto mueve el actor pero no reproduce Jump/Fall
+
+- Es el resultado runtime conocido: `Velocity.Z` no cambia por sí sola `IsFalling` en este companion/AnimBP.
+- Salta normalmente con el jugador local y conserva todas las líneas `LOCAL_MOVEMENT_STATE`. Deben mostrar el valor real de `movement_mode`, `is_falling`, `phase`, velocidad y speed al despegar, pasar por el apex, caer y aterrizar.
+- Esta build no escribe `MovementMode` en el remoto ni envía `MovementState`; esos cambios esperan la evidencia del salto local para no asumir valores numéricos.
 
 ### Protocolo incompatible
 

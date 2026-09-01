@@ -1,6 +1,6 @@
 # ExpeditionOnline
 
-Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.3.0-rc1` release candidate focuses on easy installation, smooth same-zone movement, appearance, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
+Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.3.0-rc2` instrumentation release candidate focuses on easy installation, smooth same-zone movement, explicit appearance tests, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
 
 Normal users should start with [client quick start](docs/QUICK_START_CLIENT.md) or [host quick start](docs/QUICK_START_HOST.md). Technical scope, verified companions and remaining limitations are in [Exploration RC](docs/EXPLORATION_RC.md).
 

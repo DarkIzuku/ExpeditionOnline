@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $p
 
 $help = (& $probeExe --help 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "Probe --help failed with exit code $LASTEXITCODE" }
-foreach ($option in "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed", "--snapshot-hz", "--movement-demo", "--jump-demo") {
+foreach ($option in "--character", "--outfit", "--hair", "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed", "--snapshot-hz", "--movement-demo", "--jump-demo") {
     if ($help -notmatch [regex]::Escape($option)) { throw "Probe --help is missing $option" }
 }
 
@@ -43,8 +43,13 @@ try {
     Start-Sleep -Milliseconds 750
     if ($server.HasExited) { throw "Server exited before probes connected" }
 
+    $testOutfit = "SkeletalMesh /Game/Characters/Heros/Maelle/Test/SK_Maelle_Test.SK_Maelle_Test"
+    $testHair = "SkeletalMesh /Game/Characters/Hair/Test/Maelle_Hair_Test.Maelle_Hair_Test"
+    $quotedOutfit = '"' + $testOutfit + '"'
+    $quotedHair = '"' + $testHair + '"'
+
     $probeA = Start-Process -FilePath $probeExe `
-        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeA", "--zone", "SharedZone", "--duration", "3", "--x", "100", "--y", "200", "--z", "300", "--yaw", "45", "--radius", "25", "--angular-speed", "2", "--snapshot-hz", "4" `
+        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "ProbeA", "--zone", "SharedZone", "--character", "Maelle", "--outfit", $quotedOutfit, "--hair", $quotedHair, "--duration", "3", "--x", "100", "--y", "200", "--z", "300", "--yaw", "45", "--radius", "25", "--angular-speed", "2", "--snapshot-hz", "4" `
         -WorkingDirectory $logRoot -WindowStyle Hidden `
         -RedirectStandardOutput $probeAOut -RedirectStandardError $probeAErr -PassThru
     Start-Sleep -Milliseconds 400
@@ -75,7 +80,7 @@ try {
         @{ Text = $a; Pattern = "RECV ZoneState[^`r`n]*player=$idB[^`r`n]*zone=SharedZone"; Name = "Probe A ZoneState" },
         @{ Text = $b; Pattern = "RECV ZoneState[^`r`n]*player=$idA[^`r`n]*zone=SharedZone"; Name = "Probe B ZoneState" },
         @{ Text = $a; Pattern = "RECV AppearanceState[^`r`n]*player=$idB"; Name = "Probe A AppearanceState" },
-        @{ Text = $b; Pattern = "RECV AppearanceState[^`r`n]*player=$idA"; Name = "Probe B AppearanceState" },
+        @{ Text = $b; Pattern = "RECV AppearanceState[^`r`n]*player=$idA[^`r`n]*character=Maelle[^`r`n]*outfit=$([regex]::Escape($testOutfit))[^`r`n]*hair=$([regex]::Escape($testHair))"; Name = "Probe B literal AppearanceState" },
         @{ Text = $a; Pattern = "RECV TransformSnapshot[^`r`n]*player=$idB"; Name = "Probe A TransformSnapshot" },
         @{ Text = $b; Pattern = "RECV TransformSnapshot[^`r`n]*player=$idA"; Name = "Probe B TransformSnapshot" },
         @{ Text = $b; Pattern = "RECV PlayerLeft[^`r`n]*player=$idA"; Name = "Probe B PlayerLeft" }
@@ -118,6 +123,9 @@ try {
     if ($b -notmatch 'CONNECTED[^\r\n]*angular_speed=0\.5') { throw "Probe B did not apply --angular-speed 0.5" }
     if ($a -notmatch 'CONNECTED[^\r\n]*snapshot_hz=4') { throw "Probe A did not apply --snapshot-hz 4" }
     if ($b -notmatch 'CONNECTED[^\r\n]*snapshot_hz=15') { throw "Probe B did not apply --snapshot-hz 15" }
+    if ($a -notmatch "CONNECTED[^`r`n]*character=Maelle[^`r`n]*outfit=$([regex]::Escape($testOutfit))[^`r`n]*hair=$([regex]::Escape($testHair))") {
+        throw "Probe A did not preserve literal --character/--outfit/--hair values"
+    }
     Write-Host "PASS: IDs $idA/$idB; position, motion rate, relay state and PlayerLeft verified."
 }
 finally {
