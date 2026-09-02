@@ -36,6 +36,7 @@ struct Options {
   bool duration_explicit{};
   bool movement_demo{};
   bool jump_demo{};
+  bool appearance_test{};
   bool show_help{};
 };
 
@@ -68,6 +69,8 @@ auto print_usage() -> void {
       << "  --movement-demo      Idle 5s, walk 10s, run 10s, stop 5s\n"
       << "  --jump-demo          Ground, ascend, apex, descend and land "
          "trajectory\n"
+      << "  --appearance-test    Hold the literal outfit/hair for 60 seconds "
+         "unless --duration is set\n"
       << "  --help              Show this help\n";
 }
 
@@ -120,6 +123,8 @@ auto parse_options(int argc, char **argv) -> Options {
       options.movement_demo = true;
     else if (argument == "--jump-demo")
       options.jump_demo = true;
+    else if (argument == "--appearance-test")
+      options.appearance_test = true;
     else
       throw std::runtime_error("unknown or incomplete argument: " + argument);
   }
@@ -139,6 +144,8 @@ auto parse_options(int argc, char **argv) -> Options {
     options.duration_seconds = 30;
   if (options.jump_demo && !options.movement_demo && !options.duration_explicit)
     options.duration_seconds = 10;
+  if (options.appearance_test && !options.duration_explicit)
+    options.duration_seconds = 60;
   return options;
 }
 
@@ -314,6 +321,8 @@ auto main(int argc, char **argv) -> int {
               << " snapshot_hz=" << options.snapshot_hz
               << " movement_demo=" << (options.movement_demo ? "true" : "false")
               << " jump_demo=" << (options.jump_demo ? "true" : "false")
+              << " appearance_test="
+              << (options.appearance_test ? "true" : "false")
               << '\n';
 
     proto::FrameDecoder decoder;

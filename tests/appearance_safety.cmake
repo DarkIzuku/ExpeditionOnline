@@ -18,7 +18,13 @@ foreach(required_marker IN ITEMS
         "REMOTE_ASSET_LOAD_FAILED"
         "REMOTE_HAIR_DRIFT"
         "REMOTE_VISUAL_DRIFT"
-        "SetMovementMode")
+        "SetMovementMode"
+        "pawn_mesh_property"
+        "REMOTE_DYNAMIC_MESH_COMPONENT"
+        "CHARACTER_SKIN_PROPERTY"
+        "REMOTE_OUTFIT_DRIFT"
+        "LOCAL_JUMP_SIGNAL"
+        "LOCAL_JUMP_EVENT")
     string(FIND "${game_bridge_source}" "${required_marker}" marker_position)
     if(marker_position EQUAL -1)
         message(FATAL_ERROR "GameBridge safety instrumentation is missing: ${required_marker}")

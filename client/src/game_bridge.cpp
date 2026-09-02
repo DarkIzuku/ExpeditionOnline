@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #define EXPEDITION_HAS_UE4SS_REFLECTION 1
 #include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/FString.hpp>
 #else
 #define EXPEDITION_HAS_UE4SS_REFLECTION 0
 #endif
@@ -45,6 +47,7 @@ using RC::Unreal::FRotator;
 using RC::Unreal::FVector;
 using RC::Unreal::TArray;
 using RC::Unreal::UClass;
+using RC::Unreal::UFunction;
 using RC::Unreal::UObject;
 namespace UObjectGlobals = RC::Unreal::UObjectGlobals;
 namespace logic = expedition_online::client_logic;
@@ -553,6 +556,42 @@ struct BodySelection {
   std::vector<ReachableActor> reachable_actors;
 };
 
+auto component_mesh(UObject *component) -> UObject * {
+  return is_skeletal_mesh_component(component)
+             ? object_property(component, "SkeletalMesh")
+             : nullptr;
+}
+
+auto component_has_customization_skin(UObject *component,
+                                      std::string_view expected_character = {})
+    -> bool {
+  return is_skeletal_mesh_component(component) &&
+         logic::is_customization_skin_mesh(object_name(component_mesh(component)),
+                                           expected_character);
+}
+
+auto component_has_recognized_body(UObject *component,
+                                   std::string_view expected_character = {})
+    -> bool {
+  const auto mesh_name = object_name(component_mesh(component));
+  if (mesh_name.empty() || mesh_name.find("SKM_Quinn") != std::string::npos ||
+      mesh_name.find("FaceMesh") != std::string::npos ||
+      mesh_name.find("Placeholder") != std::string::npos ||
+      mesh_name.find("/Game/Characters/Heros/") == std::string::npos)
+    return false;
+  const auto character = logic::infer_character_from_body_mesh(mesh_name);
+  return character != "Unknown" &&
+         (expected_character.empty() || character == expected_character);
+}
+
+auto is_character_skin_component(UObject *component) -> bool {
+  if (!object_is_valid(component))
+    return false;
+  const auto signature = object_name(component) + " " +
+                         object_name(component->GetClassPrivate());
+  return signature.find("BP_CharacterSkinComponent") != std::string::npos;
+}
+
 auto has_visual_property_keyword(std::string name) -> bool {
   std::transform(name.begin(), name.end(), name.begin(),
                  [](unsigned char value) {
@@ -606,6 +645,106 @@ auto log_filtered_visual_properties(Logger &logger, std::string_view prefix,
 #endif
 }
 
+auto log_character_skin_properties(Logger &logger, std::string_view scope,
+                                   std::uint64_t player_id, UObject *owner)
+    -> void {
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+  if (!object_is_valid(owner))
+    return;
+  std::size_t logged{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           owner->GetClassPrivate(),
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    const auto property_name = narrow(property->GetName());
+    if (!has_visual_property_keyword(property_name) ||
+        !property->IsA<RC::Unreal::FObjectProperty>()) {
+      continue;
+    }
+    auto *value = *property->ContainerPtrToValuePtr<UObject *>(owner);
+    logger.info("CHARACTER_SKIN_PROPERTY scope=" + std::string(scope) +
+                " player=" + std::to_string(player_id) +
+                " owner=" + object_name(owner) + " property=" +
+                property_name + " value=" +
+                (object_is_valid(value) ? object_name(value) : "nil") +
+                " class=" +
+                (object_is_valid(value)
+                     ? object_name(value->GetClassPrivate())
+                     : "nil"));
+    if (++logged >= 64)
+      break;
+  }
+#else
+  (void)logger;
+  (void)scope;
+  (void)player_id;
+  (void)owner;
+#endif
+}
+
+auto select_character_skin_component_body(AActor *actor,
+                                          std::string_view expected_character,
+                                          Logger *logger,
+                                          std::string_view scope,
+                                          std::uint64_t player_id)
+    -> UObject * {
+  if (!object_is_valid(actor))
+    return nullptr;
+  auto *actor_component_class = UObjectGlobals::StaticFindObject<UClass *>(
+      nullptr, nullptr, L"/Script/Engine.ActorComponent");
+  if (!object_is_valid(actor_component_class))
+    return nullptr;
+  for (auto *skin_component :
+       actor->K2_GetComponentsByClass(actor_component_class)) {
+    if (!is_character_skin_component(skin_component))
+      continue;
+    if (logger)
+      log_character_skin_properties(*logger, scope, player_id, skin_component);
+
+    if (auto *mesh_property = object_property(skin_component, "Mesh");
+        component_has_customization_skin(mesh_property, expected_character)) {
+      return mesh_property;
+    }
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+    for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+             skin_component->GetClassPrivate(),
+             RC::Unreal::EFieldIterationFlags::IncludeSuper |
+                 RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+      const auto property_name = narrow(property->GetName());
+      if (!has_visual_property_keyword(property_name) ||
+          !property->IsA<RC::Unreal::FObjectProperty>()) {
+        continue;
+      }
+      auto *value =
+          *property->ContainerPtrToValuePtr<UObject *>(skin_component);
+      if (component_has_customization_skin(value, expected_character))
+        return value;
+    }
+#endif
+  }
+  return nullptr;
+}
+
+auto select_actor_customization_component(AActor *actor,
+                                          std::string_view expected_character)
+    -> UObject * {
+  if (!object_is_valid(actor))
+    return nullptr;
+  auto *skeletal_mesh_component_class =
+      UObjectGlobals::StaticFindObject<UClass *>(
+          nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+  if (!object_is_valid(skeletal_mesh_component_class))
+    return nullptr;
+  for (auto *component :
+       actor->K2_GetComponentsByClass(skeletal_mesh_component_class)) {
+    if (object_leaf_name(component) == "CharacterMesh0")
+      continue;
+    if (component_has_customization_skin(component, expected_character))
+      return component;
+  }
+  return nullptr;
+}
+
 auto collect_visual_mesh_snapshot(
     const std::vector<ReachableActor> &actors)
     -> std::unordered_map<std::string, std::string> {
@@ -632,7 +771,8 @@ auto collect_visual_mesh_snapshot(
   return snapshot;
 }
 
-auto select_body_component(AActor *pawn) -> BodySelection {
+auto select_local_body_component(AActor *pawn, Logger *logger = nullptr)
+    -> BodySelection {
   BodySelection selection;
   if (!object_is_valid(pawn))
     return selection;
@@ -643,40 +783,148 @@ auto select_body_component(AActor *pawn) -> BodySelection {
     return selection;
 
   selection.reachable_actors = collect_reachable_visual_actors(pawn);
-  std::vector<UObject *> component_objects;
-  std::vector<logic::AppearanceCandidate> candidates;
-  std::vector<std::string> component_sources;
-  for (const auto &reachable : selection.reachable_actors) {
-    if (!object_is_valid(reachable.actor))
-      continue;
-    const auto &components =
-        reachable.actor->K2_GetComponentsByClass(skeletal_mesh_component_class);
-    for (auto *component : components) {
-      ++selection.candidates;
-      if (!is_skeletal_mesh_component(component))
-        continue;
-      auto *mesh = object_property(component, "SkeletalMesh");
-      logic::AppearanceCandidate candidate;
-      candidate.component_leaf = object_leaf_name(component);
-      candidate.component_full_name = object_name(component);
-      candidate.owner_full_name = object_name(reachable.actor);
-      candidate.mesh_full_name = object_name(mesh);
-      candidate.directly_owned_by_pawn = reachable.actor == pawn;
-      candidate.owner_is_character_skin =
-          is_character_skin_actor(reachable.actor);
-      candidate.related_to_pawn = true;
-      component_objects.push_back(component);
-      component_sources.push_back(reachable.route);
-      candidates.push_back(std::move(candidate));
-    }
+  selection.candidates =
+      pawn->K2_GetComponentsByClass(skeletal_mesh_component_class).size();
+
+  if (auto *body = find_owned_skeletal_component(pawn, "Body");
+      component_has_recognized_body(body)) {
+    selection.component = body;
+    selection.mesh = component_mesh(body);
+    selection.source = "pawn_body";
+    return selection;
   }
 
-  const auto selected = logic::select_appearance_candidate(candidates);
-  if (!selected)
+  if (auto *mesh_property = object_property(pawn, "Mesh");
+      component_has_customization_skin(mesh_property)) {
+    selection.component = mesh_property;
+    selection.mesh = component_mesh(mesh_property);
+    selection.source = "pawn_mesh_property";
     return selection;
-  selection.component = component_objects[*selected];
-  selection.mesh = object_property(selection.component, "SkeletalMesh");
-  selection.source = component_sources[*selected];
+  }
+
+  if (auto *component = select_actor_customization_component(pawn, {})) {
+    selection.component = component;
+    selection.mesh = component_mesh(component);
+    selection.source = "pawn_skin_component_scan";
+    return selection;
+  }
+
+  if (auto *component = select_character_skin_component_body(
+          pawn, {}, logger, "local", 0)) {
+    selection.component = component;
+    selection.mesh = component_mesh(component);
+    selection.source = "pawn_skin_component_scan";
+    return selection;
+  }
+
+  for (const auto &reachable : selection.reachable_actors) {
+    if (!object_is_valid(reachable.actor) || reachable.actor == pawn)
+      continue;
+    if (auto *body = find_owned_skeletal_component(reachable.actor, "Body");
+        component_has_recognized_body(body)) {
+      selection.component = body;
+      selection.mesh = component_mesh(body);
+      selection.source = "pawn_skin_component_scan";
+      return selection;
+    }
+    if (auto *component =
+            select_actor_customization_component(reachable.actor, {})) {
+      selection.component = component;
+      selection.mesh = component_mesh(component);
+      selection.source = "pawn_skin_component_scan";
+      return selection;
+    }
+  }
+  return selection;
+}
+
+auto remote_route_name(const std::string &reachable_route) -> std::string {
+  if (reachable_route.find("attached_actor") != std::string::npos)
+    return "attached_actor";
+  if (reachable_route.find("child_actor") != std::string::npos)
+    return "child_actor";
+  return "skin_component";
+}
+
+auto select_remote_body_component(AActor *actor,
+                                  std::string_view expected_character,
+                                  Logger *logger, std::uint64_t player_id)
+    -> BodySelection {
+  BodySelection selection;
+  if (!object_is_valid(actor))
+    return selection;
+  selection.reachable_actors = collect_reachable_visual_actors(actor);
+
+  if (auto *body = find_owned_skeletal_component(actor, "Body");
+      component_has_recognized_body(body, expected_character)) {
+    selection.component = body;
+    selection.mesh = component_mesh(body);
+    selection.source = "body";
+    return selection;
+  }
+  if (auto *mesh_property = object_property(actor, "Mesh");
+      is_skeletal_mesh_component(mesh_property)) {
+    if (logger) {
+      logger->info("REMOTE_DYNAMIC_MESH_COMPONENT player=" +
+                   std::to_string(player_id) + " component=" +
+                   object_name(mesh_property) + " mesh=" +
+                   object_name(component_mesh(mesh_property)));
+    }
+    if (component_has_customization_skin(mesh_property, expected_character)) {
+      selection.component = mesh_property;
+      selection.mesh = component_mesh(mesh_property);
+      selection.source = "mesh_property";
+      return selection;
+    }
+  }
+  if (auto *component =
+          select_actor_customization_component(actor, expected_character)) {
+    selection.component = component;
+    selection.mesh = component_mesh(component);
+    selection.source = "skin_component";
+    return selection;
+  }
+  if (auto *component = select_character_skin_component_body(
+          actor, expected_character, logger, "remote", player_id)) {
+    selection.component = component;
+    selection.mesh = component_mesh(component);
+    selection.source = "skin_component";
+    return selection;
+  }
+
+  for (const auto &reachable : selection.reachable_actors) {
+    if (!object_is_valid(reachable.actor) || reachable.actor == actor)
+      continue;
+    if (auto *body = find_owned_skeletal_component(reachable.actor, "Body");
+        component_has_recognized_body(body, expected_character)) {
+      selection.component = body;
+      selection.mesh = component_mesh(body);
+      selection.source = remote_route_name(reachable.route);
+      return selection;
+    }
+    if (auto *mesh_property = object_property(reachable.actor, "Mesh");
+        component_has_customization_skin(mesh_property, expected_character)) {
+      selection.component = mesh_property;
+      selection.mesh = component_mesh(mesh_property);
+      selection.source = remote_route_name(reachable.route);
+      return selection;
+    }
+    if (auto *component = select_actor_customization_component(
+            reachable.actor, expected_character)) {
+      selection.component = component;
+      selection.mesh = component_mesh(component);
+      selection.source = remote_route_name(reachable.route);
+      return selection;
+    }
+    if (auto *component = select_character_skin_component_body(
+            reachable.actor, expected_character, logger, "remote",
+            player_id)) {
+      selection.component = component;
+      selection.mesh = component_mesh(component);
+      selection.source = remote_route_name(reachable.route);
+      return selection;
+    }
+  }
   return selection;
 }
 
@@ -815,6 +1063,57 @@ auto log_local_visual_diagnostic(Logger &logger, AActor *pawn,
   }
 }
 
+auto has_jump_signal_keyword(std::string name) -> bool {
+  std::transform(name.begin(), name.end(), name.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  constexpr std::string_view keywords[]{
+      "jump",          "fall",       "air",       "ground",
+      "movementstate", "movement_state", "movementaction",
+      "movement_action", "locomotion", "landed", "land"};
+  return std::any_of(std::begin(keywords), std::end(keywords),
+                     [&](std::string_view keyword) {
+                       return name.find(keyword) != std::string::npos;
+                     });
+}
+
+auto read_filtered_jump_signals(UObject *owner, std::string_view role)
+    -> std::unordered_map<std::string, std::string> {
+  std::unordered_map<std::string, std::string> signals;
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+  if (!object_is_valid(owner))
+    return signals;
+  std::size_t captured{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           owner->GetClassPrivate(),
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    const auto property_name = narrow(property->GetName());
+    if (!has_jump_signal_keyword(property_name))
+      continue;
+    auto *value_container = property->ContainerPtrToValuePtr<void>(owner);
+    if (!value_container)
+      continue;
+    RC::Unreal::FString value_text{};
+    property->ExportTextItem(value_text, value_container, value_container,
+                             owner, 0);
+    const auto *text_value = *value_text;
+    const auto value = text_value ? narrow(std::wstring_view{text_value})
+                                  : std::string{};
+    signals.emplace(std::string(role) + "|" + object_name(owner) + "|" +
+                        property_name,
+                    value);
+    if (++captured >= 128)
+      break;
+  }
+#else
+  (void)owner;
+  (void)role;
+#endif
+  return signals;
+}
+
 } // namespace
 
 GameBridge::GameBridge(const ClientConfig &config, NetworkClient &network,
@@ -850,6 +1149,44 @@ auto GameBridge::tick() -> void {
     logger_.error(std::string("GAME_BRIDGE_EXCEPTION ") + exception.what());
   }
   in_bridge_tick = false;
+}
+
+auto GameBridge::observe_process_event(UObject *object, UFunction *function)
+    -> void {
+  auto *function_object = reinterpret_cast<UObject *>(function);
+  if (shutdown_ || !object_is_valid(object) ||
+      !object_is_valid(function_object))
+    return;
+  const auto tracked = local_jump_objects_.find(object);
+  if (tracked == local_jump_objects_.end())
+    return;
+  const auto function_name = object_leaf_name(function_object);
+  if (!has_jump_signal_keyword(function_name))
+    return;
+  if (function_name.starts_with("Is") || function_name.starts_with("Can") ||
+      function_name.starts_with("Get"))
+    return;
+  const auto signature =
+      object_name(object) + "|" + object_name(function_object);
+  const auto now = std::chrono::steady_clock::now();
+  if (const auto found = local_jump_event_times_.find(signature);
+      found != local_jump_event_times_.end() &&
+      now - found->second < std::chrono::milliseconds(250)) {
+    return;
+  }
+  local_jump_event_times_[signature] = now;
+  logger_.info("LOCAL_JUMP_EVENT object=" + object_name(object) + " role=" +
+               tracked->second + " function=" + object_name(function_object));
+  std::string folded = function_name;
+  std::transform(folded.begin(), folded.end(), folded.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  if (folded.find("land") != std::string::npos) {
+    logger_.info("LOCAL_LAND_SIGNAL owner=" + object_name(object) +
+                 " role=" + tracked->second +
+                 " function=" + object_name(function_object));
+  }
 }
 
 auto GameBridge::shutdown() -> void {
@@ -914,6 +1251,8 @@ auto GameBridge::process_incoming() -> void {
         remote.hair_component = nullptr;
         remote.expected_body_mesh = nullptr;
         remote.expected_hair_mesh = nullptr;
+        remote.body_verification_pending = false;
+        remote.hair_verification_pending = false;
         remote.body_route.clear();
         remote.hair_route.clear();
         remote.spawned_character.clear();
@@ -924,6 +1263,8 @@ auto GameBridge::process_incoming() -> void {
       remote.appearance = state;
       remote.expected_body_mesh = nullptr;
       remote.expected_hair_mesh = nullptr;
+      remote.body_verification_pending = false;
+      remote.hair_verification_pending = false;
       remote.appearance_dirty = true;
       remote.appearance_attempt_count = 0;
       remote.next_appearance_retry = {};
@@ -1019,6 +1360,10 @@ auto GameBridge::update_local_player() -> void {
     local_movement_state_initialized_ = false;
     local_movement_state_.reset();
     last_local_movement_signature_.clear();
+    local_jump_signals_.clear();
+    local_jump_objects_.clear();
+    local_jump_event_times_.clear();
+    next_local_jump_scan_ = {};
     if (exploration_available_) {
       exploration_available_ = false;
       destroy_all_remotes();
@@ -1151,6 +1496,7 @@ auto GameBridge::update_local_player() -> void {
           current_movement));
     }
   }
+  update_local_jump_diagnostics(pawn);
   resync_requested_ = false;
   if (now >= next_local_transform_log_) {
     next_local_transform_log_ = now + std::chrono::seconds(2);
@@ -1216,6 +1562,83 @@ auto GameBridge::current_zone(AActor *pawn) -> std::string {
   return {};
 }
 
+auto GameBridge::update_local_jump_diagnostics(AActor *pawn) -> void {
+  const auto now = std::chrono::steady_clock::now();
+  if (!object_is_valid(pawn) || now < next_local_jump_scan_)
+    return;
+  next_local_jump_scan_ = now + std::chrono::milliseconds(50);
+
+  std::unordered_map<UObject *, std::string> objects;
+  objects.emplace(pawn, "pawn");
+  if (object_is_valid(local_movement_component_))
+    objects.emplace(local_movement_component_, "movement_component");
+
+  auto *skeletal_mesh_component_class =
+      UObjectGlobals::StaticFindObject<UClass *>(
+          nullptr, nullptr, L"/Script/Engine.SkeletalMeshComponent");
+  if (object_is_valid(skeletal_mesh_component_class)) {
+    for (const auto &reachable : collect_reachable_visual_actors(pawn)) {
+      if (!object_is_valid(reachable.actor))
+        continue;
+      for (auto *component : reachable.actor->K2_GetComponentsByClass(
+               skeletal_mesh_component_class)) {
+        if (!is_skeletal_mesh_component(component))
+          continue;
+        if (auto *anim_instance =
+                call_object_return(component, "GetAnimInstance");
+            object_is_valid(anim_instance)) {
+          objects.emplace(anim_instance,
+                          "anim_instance:" + object_leaf_name(component));
+        }
+      }
+    }
+  }
+  local_jump_objects_ = objects;
+
+  std::unordered_map<std::string, std::string> current;
+  for (const auto &[object, role] : objects) {
+    auto values = read_filtered_jump_signals(object, role);
+    current.insert(values.begin(), values.end());
+  }
+
+  const auto log_change = [&](const std::string &key, const std::string &old_value,
+                              const std::string &new_value) {
+    const auto first = key.find('|');
+    const auto last = key.rfind('|');
+    const auto role = first == std::string::npos ? "unknown" : key.substr(0, first);
+    const auto owner = first == std::string::npos || last == first
+                           ? "unknown"
+                           : key.substr(first + 1, last - first - 1);
+    const auto property =
+        last == std::string::npos ? key : key.substr(last + 1);
+    std::string folded = property;
+    std::transform(folded.begin(), folded.end(), folded.begin(),
+                   [](unsigned char value) {
+                     return static_cast<char>(std::tolower(value));
+                   });
+    const auto prefix = folded.find("land") != std::string::npos
+                            ? "LOCAL_LAND_SIGNAL"
+                            : "LOCAL_JUMP_SIGNAL";
+    logger_.info(std::string(prefix) + " owner=" + owner + " role=" + role +
+                 " property=" + property + " old=" + old_value +
+                 " new=" + new_value);
+  };
+
+  for (const auto &[key, value] : current) {
+    const auto old = local_jump_signals_.find(key);
+    if (old == local_jump_signals_.end()) {
+      log_change(key, "<unset>", value);
+    } else if (old->second != value) {
+      log_change(key, old->second, value);
+    }
+  }
+  for (const auto &[key, old_value] : local_jump_signals_) {
+    if (!current.contains(key))
+      log_change(key, old_value, "<unreachable>");
+  }
+  local_jump_signals_ = std::move(current);
+}
+
 auto GameBridge::capture_appearance(AActor *pawn) -> protocol::AppearanceState {
   const auto scan_started = std::chrono::steady_clock::now();
   if (local_visual_pawn_ != pawn) {
@@ -1231,7 +1654,7 @@ auto GameBridge::capture_appearance(AActor *pawn) -> protocol::AppearanceState {
 
   // This is intentionally bounded to components owned by the local Pawn.
   // Global UObject scans during level streaming can stall the game thread.
-  const auto body_selection = select_body_component(pawn);
+  const auto body_selection = select_local_body_component(pawn, &logger_);
   local_body_component_ = body_selection.component;
   if (!object_is_valid(local_hair_component_)) {
     auto *hair_property =
@@ -1257,8 +1680,10 @@ auto GameBridge::capture_appearance(AActor *pawn) -> protocol::AppearanceState {
   const auto body_mesh_log =
       object_is_valid(body_mesh) ? object_name(body_mesh) : "nil";
   if (!body_diagnostic_initialized_ ||
-      body_component_log != last_body_component_log_) {
-    logger_.info("APPEARANCE_BODY_COMPONENT component=" + body_component_log);
+      body_component_log != last_body_component_log_ ||
+      body_selection.source != last_body_source_log_) {
+    logger_.info("APPEARANCE_BODY_COMPONENT component=" + body_component_log +
+                 " route=" + body_selection.source);
     last_body_component_log_ = body_component_log;
   }
   if (!body_diagnostic_initialized_ || body_mesh_log != last_body_mesh_log_) {
@@ -1275,8 +1700,7 @@ auto GameBridge::capture_appearance(AActor *pawn) -> protocol::AppearanceState {
     }
   } else {
     local_visual_route_diagnostic_logged_ = false;
-    if (body_selection.source != "pawn" &&
-        body_selection.source != last_body_source_log_) {
+    if (body_selection.source != last_body_source_log_) {
       logger_.info("APPEARANCE_VISUAL_ROUTE source=" + body_selection.source +
                    " component=" + object_name(body_selection.component));
     }
@@ -1388,6 +1812,8 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
   remote.spawned_character = mapped_character;
   remote.visual_mesh_snapshot.clear();
   remote.visual_snapshot_initialized = false;
+  remote.body_verification_pending = false;
+  remote.hair_verification_pending = false;
   remote.movement_warning_logged = false;
   remote.skeletal_diagnostic_logged = false;
   remote.appearance_attempt_count = 0;
@@ -1519,15 +1945,15 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
   if (now < remote.next_appearance_retry)
     return;
 
-  const auto reachable_actors = collect_reachable_visual_actors(remote.actor);
-  if (!object_is_valid(remote.body_component) ||
-      object_leaf_name(remote.body_component) !=
-          config_.body_component_property) {
-    const auto selection = find_reachable_skeletal_component(
-        reachable_actors, config_.body_component_property);
-    remote.body_component = selection.component;
-    remote.body_route = selection.route;
-  }
+  const auto first_attempt = remote.appearance_attempt_count == 0;
+  const auto requested_character =
+      class_leaf(remote.appearance->character_class);
+  const auto body_selection = select_remote_body_component(
+      remote.actor, requested_character, first_attempt ? &logger_ : nullptr,
+      player_id);
+  const auto reachable_actors = body_selection.reachable_actors;
+  remote.body_component = body_selection.component;
+  remote.body_route = body_selection.source;
   if (!object_is_valid(remote.hair_component) ||
       object_leaf_name(remote.hair_component) !=
           config_.hair_component_property) {
@@ -1537,7 +1963,6 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
     remote.hair_route = selection.route;
   }
 
-  const auto first_attempt = remote.appearance_attempt_count == 0;
   if (first_attempt || object_is_valid(remote.body_component)) {
     logger_.info(
         "REMOTE_BODY_COMPONENT player=" + std::to_string(player_id) +
@@ -1596,6 +2021,7 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
                    std::to_string(player_id) + " requested=" +
                    object_name(body_mesh) + " observed=" +
                    object_name(observed));
+      remote.body_verification_pending = true;
     }
   }
   if (hair_requested && object_is_valid(hair_mesh) &&
@@ -1620,8 +2046,6 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
   }
 
   ++remote.appearance_attempt_count;
-  const auto requested_character =
-      class_leaf(remote.appearance->character_class);
   const auto character_ready = !requested_character.empty() &&
                                requested_character ==
                                    remote.spawned_character;
@@ -1747,24 +2171,42 @@ auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
       continue;
     visual_drift = true;
     const auto separator = key.find('|');
+    const auto component_name =
+        separator == std::string::npos ? key : key.substr(separator + 1);
+    std::string expected{"nil"};
+    if (object_is_valid(remote.body_component) &&
+        component_name == object_name(remote.body_component))
+      expected = object_name(remote.expected_body_mesh);
+    if (object_is_valid(remote.hair_component) &&
+        component_name == object_name(remote.hair_component))
+      expected = object_name(remote.expected_hair_mesh);
     logger_.warning(
         "REMOTE_VISUAL_DRIFT player=" + std::to_string(player_id) +
         " object=" + key.substr(0, separator) + " component=" +
-        (separator == std::string::npos ? key : key.substr(separator + 1)) +
+        component_name +
         " old_mesh=" +
         (old == remote.visual_mesh_snapshot.end() ? "nil" : old->second) +
-        " new_mesh=" + new_mesh);
+        " new_mesh=" + new_mesh + " expected=" + expected);
   }
   for (const auto &[key, old_mesh] : remote.visual_mesh_snapshot) {
     if (current.contains(key))
       continue;
     visual_drift = true;
     const auto separator = key.find('|');
+    const auto component_name =
+        separator == std::string::npos ? key : key.substr(separator + 1);
+    std::string expected{"nil"};
+    if (object_is_valid(remote.body_component) &&
+        component_name == object_name(remote.body_component))
+      expected = object_name(remote.expected_body_mesh);
+    if (object_is_valid(remote.hair_component) &&
+        component_name == object_name(remote.hair_component))
+      expected = object_name(remote.expected_hair_mesh);
     logger_.warning(
         "REMOTE_VISUAL_DRIFT player=" + std::to_string(player_id) +
         " object=" + key.substr(0, separator) + " component=" +
-        (separator == std::string::npos ? key : key.substr(separator + 1)) +
-        " old_mesh=" + old_mesh + " new_mesh=nil");
+        component_name + " old_mesh=" + old_mesh +
+        " new_mesh=nil expected=" + expected);
   }
 
   if (visual_drift)
@@ -1802,12 +2244,48 @@ auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
   }
 
   if (object_is_valid(remote.expected_body_mesh) &&
-      object_is_valid(remote.body_component) &&
-      object_property(remote.body_component, config_.mesh_asset_property) !=
-          remote.expected_body_mesh) {
-    remote.appearance_dirty = true;
-    remote.appearance_attempt_count = 0;
-    remote.next_appearance_retry = {};
+      remote.appearance) {
+    const auto selection = select_remote_body_component(
+        remote.actor, class_leaf(remote.appearance->character_class), nullptr,
+        player_id);
+    if (object_is_valid(selection.component)) {
+      remote.body_component = selection.component;
+      remote.body_route = selection.source;
+    }
+    if (object_is_valid(remote.body_component)) {
+      auto *observed =
+          object_property(remote.body_component, config_.mesh_asset_property);
+      if (remote.body_verification_pending) {
+        remote.body_verification_pending = false;
+        logger_.info("REMOTE_OUTFIT_APPLIED player=" +
+                     std::to_string(player_id) +
+                     " verification=next_tick requested=" +
+                     object_name(remote.expected_body_mesh) + " observed=" +
+                     object_name(observed));
+      }
+      if (observed != remote.expected_body_mesh) {
+        logger_.warning("REMOTE_OUTFIT_DRIFT player=" +
+                        std::to_string(player_id) + " expected=" +
+                        object_name(remote.expected_body_mesh) + " observed=" +
+                        object_name(observed));
+        if (set_object_property(remote.body_component,
+                                config_.mesh_asset_property,
+                                remote.expected_body_mesh)) {
+          call_no_args(remote.body_component, "MarkRenderStateDirty");
+          observed = object_property(remote.body_component,
+                                     config_.mesh_asset_property);
+          logger_.info("REMOTE_OUTFIT_APPLIED player=" +
+                       std::to_string(player_id) + " requested=" +
+                       object_name(remote.expected_body_mesh) + " observed=" +
+                       object_name(observed) + " reason=drift_reapply");
+          remote.body_verification_pending = true;
+        } else {
+          remote.appearance_dirty = true;
+          remote.appearance_attempt_count = 0;
+          remote.next_appearance_retry = {};
+        }
+      }
+    }
   }
   remote.visual_mesh_snapshot =
       collect_visual_mesh_snapshot(reachable_actors);

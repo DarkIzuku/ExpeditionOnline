@@ -16,6 +16,7 @@
 namespace RC::Unreal {
 class AActor;
 class UObject;
+class UFunction;
 } // namespace RC::Unreal
 
 namespace expedition_online::client {
@@ -28,6 +29,8 @@ public:
   auto operator=(const GameBridge &) -> GameBridge & = delete;
 
   auto tick() -> void;
+  auto observe_process_event(RC::Unreal::UObject *object,
+                             RC::Unreal::UFunction *function) -> void;
   auto shutdown() -> void;
 
 private:
@@ -59,6 +62,7 @@ private:
     bool visual_snapshot_initialized{};
     bool movement_state_dirty{};
     bool hair_verification_pending{};
+    bool body_verification_pending{};
     bool clock_offset_initialized{};
     std::size_t appearance_attempt_count{};
     double clock_offset_ms{};
@@ -86,6 +90,7 @@ private:
                                    RemotePlayer &remote) -> void;
   auto verify_remote_visual_state(std::uint64_t player_id,
                                   RemotePlayer &remote) -> void;
+  auto update_local_jump_diagnostics(RC::Unreal::AActor *pawn) -> void;
   auto disable_remote_ai(RC::Unreal::AActor *actor) -> void;
   auto destroy_remote(std::uint64_t player_id) -> void;
   auto destroy_all_remotes() -> void;
@@ -109,6 +114,10 @@ private:
   bool local_visual_route_diagnostic_logged_{};
   bool local_movement_state_initialized_{};
   std::string last_local_movement_signature_;
+  std::unordered_map<std::string, std::string> local_jump_signals_;
+  std::unordered_map<std::string, std::chrono::steady_clock::time_point>
+      local_jump_event_times_;
+  std::unordered_map<RC::Unreal::UObject *, std::string> local_jump_objects_;
   std::unordered_map<std::string, RC::Unreal::UObject *> asset_cache_;
   std::size_t appearance_failure_count_{};
   bool resync_requested_{};
@@ -121,5 +130,6 @@ private:
   std::chrono::steady_clock::time_point next_appearance_scan_log_{};
   std::chrono::steady_clock::time_point next_snapshot_{};
   std::chrono::steady_clock::time_point next_local_transform_log_{};
+  std::chrono::steady_clock::time_point next_local_jump_scan_{};
 };
 } // namespace expedition_online::client

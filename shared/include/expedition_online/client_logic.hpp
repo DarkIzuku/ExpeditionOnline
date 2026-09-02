@@ -50,6 +50,12 @@ auto asset_resolution_source(bool cached_valid, bool already_loaded_valid,
                              bool loaded_valid) -> AssetResolutionSource;
 auto appearance_asset_has_drift(const std::string &expected,
                                 const std::string &observed) -> bool;
+auto should_reapply_visual_asset(const std::string &expected,
+                                 const std::string &observed,
+                                 bool component_ready) -> bool;
+auto is_customization_skin_mesh(const std::string &mesh_path,
+                                std::string_view expected_character = {})
+    -> bool;
 
 enum class AppearanceApplyDecision {
   complete,
@@ -85,6 +91,7 @@ struct AppearanceCandidate {
   bool directly_owned_by_pawn{};
   bool owner_is_character_skin{};
   bool related_to_pawn{};
+  bool selected_by_mesh_property{};
 };
 
 // Negative means the candidate is not safe to publish as the current Body.

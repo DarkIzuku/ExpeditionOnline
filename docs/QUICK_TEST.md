@@ -77,7 +77,7 @@ Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz
 Para probar apariencia remota real, copia literalmente `outfit=` y `hair=` de una línea `LOCAL_APPEARANCE` y pásalos entre comillas:
 
 ```powershell
-ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name "Maelle Appearance A" --zone "<LOCAL_ZONE exacta>" --duration 60 --x <X> --y <Y> --z <Z> --yaw <YAW> --snapshot-hz 15 --character Maelle --outfit "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/SK_Maelle_Esquie.SK_Maelle_Esquie" --hair "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Maelle_Hair_ActeIII_Metahuman_skl.Maelle_Hair_ActeIII_Metahuman_skl"
+ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name "Maelle Appearance A" --zone "<LOCAL_ZONE exacta>" --appearance-test --x <X> --y <Y> --z <Z> --yaw <YAW> --snapshot-hz 15 --character Maelle --outfit "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/SK_Maelle_Esquie.SK_Maelle_Esquie" --hair "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Maelle_Hair_ActeIII_Metahuman_skl.Maelle_Hair_ActeIII_Metahuman_skl"
 ```
 
 Antes de iniciarlo, deja la Maelle local con outfit/hair B/B distintos. Mientras el Probe continúa, cambia la Maelle local a otro C/C. El remoto debe conservar Esquie/ActeIII. Confirma `REMOTE_ASSET_RESOLVED`, dos verificaciones `REMOTE_HAIR_APPLIED requested=... observed=...` y, si el sistema global intenta sobrescribirlo, `REMOTE_HAIR_DRIFT` seguido de `reason=drift_reapply`. El Body solo se considera resuelto cuando también aparece `REMOTE_OUTFIT_APPLIED requested=... observed=...` y finalmente `REMOTE_APPEARANCE_APPLIED complete=true`.
@@ -123,12 +123,12 @@ El Probe conserva esos tres valores literalmente en `AppearanceState`; no intent
 
 ### La apariencia tarda en estar lista
 
-- La identidad se infiere únicamente del `SkeletalMesh` de un componente exacto `Body` enumerado desde el Pawn con `K2_GetComponentsByClass`, no de la clase genérica `BP_jRPG_Character_World_C`, `Pawn.Mesh` ni el pelo.
-- Busca `APPEARANCE_BODY_COMPONENT component=...Body` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
+- La identidad se infiere del mesh visual real: primero `Body`; después de cambiar skin, `Pawn.Mesh`; finalmente un componente del propio Pawn cuyo asset sea `/Game/Characters/Heros/<Character>/Customization/Skin/...`. Nunca se infiere del pelo.
+- Busca `APPEARANCE_BODY_COMPONENT component=... route=pawn_body|pawn_mesh_property|pawn_skin_component_scan` y `APPEARANCE_BODY_MESH mesh=SkeletalMesh /Game/Characters/Heros/...`.
 - Mientras Unreal reconstruye el skin puede aparecer `LOCAL_APPEARANCE_PENDING reason=body_not_ready`; el cliente conserva la última apariencia válida y no envía `Unknown`.
 - `APPEARANCE_SCAN duration_us=... candidates=... source=...` debe permanecer muy por debajo de 5000 microsegundos. Un scan superior a 5 ms se registra como warning.
 - Si el Body directo desaparece, busca `LOCAL_SKIN_PROPERTY`, `LOCAL_COMPONENT_DIAGNOSTIC`, `LOCAL_VISUAL_ROUTE` y `APPEARANCE_VISUAL_ROUTE`. La búsqueda sigue solamente relaciones alcanzables desde el Pawn y nunca hace un scan UObject global.
-- Para el remoto busca `REMOTE_VISUAL_ACTOR`, `REMOTE_VISUAL_PROPERTY`, `REMOTE_SKELETAL_COMPONENT`, `REMOTE_ASSET_RESOLVED`, `REMOTE_VISUAL_DRIFT`, `REMOTE_HAIR_DRIFT`, `REMOTE_OUTFIT_APPLIED` y `REMOTE_HAIR_APPLIED`. Los reintentos terminan en fail-open.
+- Para el remoto busca `REMOTE_DYNAMIC_MESH_COMPONENT`, `CHARACTER_SKIN_PROPERTY scope=remote`, `REMOTE_BODY_COMPONENT route=...`, `REMOTE_ASSET_RESOLVED`, `REMOTE_VISUAL_DRIFT`, `REMOTE_OUTFIT_DRIFT`, `REMOTE_HAIR_DRIFT`, `REMOTE_OUTFIT_APPLIED` y `REMOTE_HAIR_APPLIED`. Los reintentos terminan en fail-open.
 - Las rutas de Maelle, Lune, Sciel, Verso, Gustave y Monoco se reconocen; solo las clases remotas de Maelle, Sciel y Verso están verificadas por ahora.
 
 ### El remoto se mueve a tirones
@@ -148,7 +148,8 @@ El Probe conserva esos tres valores literalmente en `AppearanceState`; no intent
 - Ejecuta el Probe con `--jump-demo --snapshot-hz 15` en la misma zona y posición base del cliente.
 - Debe emitir `DEMO_MOVEMENT_STATE mode=1`, después `mode=3` y finalmente `mode=1`.
 - En `ExpeditionOnline.log`, busca `REMOTE_MOVEMENT_STATE requested_mode=3 observed_mode=3 is_falling=true` y después `requested_mode=1 observed_mode=1 is_falling=false`.
-- La posición interpolada de red continúa siendo autoritativa; este estado solo alimenta la lógica Jump/Fall del AnimBP. La transición visual aún debe validarse en runtime.
+- Para descubrir la señal ALS que falta, haz además un salto real con el personaje local. Conserva las líneas `LOCAL_JUMP_SIGNAL`, `LOCAL_JUMP_EVENT` y `LOCAL_LAND_SIGNAL`; solo aparecen al cambiar una propiedad o al observar una función filtrada sobre el Pawn local, su movement component o sus AnimInstances.
+- La posición interpolada de red continúa siendo autoritativa. Esta build no llama `Jump()` ni reproduce montages a ciegas; la transición visual normal queda pendiente de identificar una señal inequívoca en esos logs.
 
 ### Protocolo incompatible
 

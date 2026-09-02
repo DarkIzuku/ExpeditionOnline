@@ -36,7 +36,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase
     ExpeditionOnlineMod()
     {
         ModName = STR("ExpeditionOnline");
-        ModVersion = STR("0.4.0-rc1");
+        ModVersion = STR("0.4.0-rc2");
         ModDescription = STR("Exploration-only online co-op relay prototype for Clair Obscur: Expedition 33");
         ModAuthors = STR("ExpeditionOnline contributors");
         RC::Output::send<RC::LogLevel::Verbose>(STR("[ExpeditionOnline] native mod loaded\n"));
@@ -71,8 +71,12 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase
             network_->start();
 
             hook_id_ = RC::Unreal::Hook::RegisterProcessEventPostCallback(
-                [this](auto&, RC::Unreal::UObject*, RC::Unreal::UFunction*, void*) {
-                    if (bridge_) bridge_->tick();
+                [this](auto&, RC::Unreal::UObject* object,
+                       RC::Unreal::UFunction* function, void*) {
+                    if (bridge_) {
+                        bridge_->observe_process_event(object, function);
+                        bridge_->tick();
+                    }
                 },
                 {false, false, STR("ExpeditionOnline"), STR("GameThreadBridge")});
 

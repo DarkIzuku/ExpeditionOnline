@@ -188,7 +188,7 @@ auto test_appearance_selection() -> void {
   auto generic = direct;
   generic.component_leaf = "SkeletalMeshComponent_2147473671";
   check(logic::score_appearance_candidate(generic) < 0,
-        "generic component rejected");
+        "generic non-customization component rejected");
   auto quinn = direct;
   quinn.mesh_full_name =
       "SkeletalMesh /Game/Characters/Mannequins/Meshes/SKM_Quinn.SKM_Quinn";
@@ -205,6 +205,43 @@ auto test_appearance_selection() -> void {
   const auto selected = logic::select_appearance_candidate(bounded_candidates);
   check(selected && *selected == 1,
         "bounded component resolver selects valid Body");
+
+  logic::AppearanceCandidate pawn_mesh{
+      "SkeletalMeshComponent_2147470943",
+      "SkeletalMeshComponent /Game/Map.Pawn.SkeletalMeshComponent_2147470943",
+      "BP_jRPG_Character_World_C /Game/Map.Pawn",
+      "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/"
+      "SK_Maelle_Esquie.SK_Maelle_Esquie",
+      true,
+      false,
+      true,
+      true,
+  };
+  check(logic::is_customization_skin_mesh(pawn_mesh.mesh_full_name, "Maelle"),
+        "Pawn.Mesh customization skin accepted");
+  check(logic::score_appearance_candidate(pawn_mesh) > 0,
+        "local resolver accepts Pawn.Mesh dynamic component");
+  const auto dynamic_only =
+      logic::select_appearance_candidate({pawn_mesh});
+  check(dynamic_only && *dynamic_only == 0,
+        "remote resolver can select a dynamic Mesh property component");
+  const auto body_first =
+      logic::select_appearance_candidate({pawn_mesh, direct});
+  check(body_first && *body_first == 1,
+        "exact Body retains priority over dynamic Mesh property");
+  auto face = pawn_mesh;
+  face.mesh_full_name =
+      "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/FaceMesh";
+  check(logic::score_appearance_candidate(face) < 0, "Face mesh rejected");
+  auto hair = pawn_mesh;
+  hair.mesh_full_name =
+      "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Hair";
+  check(logic::score_appearance_candidate(hair) < 0, "Hair mesh rejected");
+  auto placeholder = pawn_mesh;
+  placeholder.mesh_full_name =
+      "SkeletalMesh /Game/Characters/Heros/Maelle/SK_Maelle_Placeholder";
+  check(logic::score_appearance_candidate(placeholder) < 0,
+        "Placeholder mesh rejected");
 
   const proto::AppearanceState valid{1, "Lune", direct.mesh_full_name,
                                      "/Game/Characters/Hair/LuneHair"};
@@ -281,6 +318,14 @@ auto test_remote_asset_safety() -> void {
         "hair drift requests reapply");
   check(!logic::appearance_asset_has_drift("HairA", "HairA"),
         "matching hair does not reapply");
+  check(!logic::appearance_asset_has_drift("OutfitA", "OutfitA"),
+        "outfit verification accepts observed requested asset");
+  check(logic::should_reapply_visual_asset("OutfitA", "OutfitB", true),
+        "outfit drift requests reapply when component is ready");
+  check(logic::should_reapply_visual_asset("HairA", "HairB", true),
+        "hair drift requests reapply when component is ready");
+  check(!logic::should_reapply_visual_asset("OutfitA", "OutfitB", false),
+        "missing component is resolved before drift reapply");
 }
 } // namespace
 

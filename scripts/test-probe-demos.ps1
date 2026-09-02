@@ -13,6 +13,11 @@ if ([string]::IsNullOrWhiteSpace($BinDirectory)) {
 $bin = (Resolve-Path -LiteralPath $BinDirectory).Path
 $serverExe = Join-Path $bin "ExpeditionOnlineServer.exe"
 $probeExe = Join-Path $bin "ExpeditionOnlineProbe.exe"
+$helpText = (& $probeExe --help) -join "`n"
+if ($helpText -notmatch "--appearance-test" -or $helpText -notmatch "--character" -or `
+    $helpText -notmatch "--outfit" -or $helpText -notmatch "--hair") {
+    throw "Probe help is missing literal appearance test options"
+}
 $root = Join-Path $projectRoot "build\probe-demos"
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $serverOut = Join-Path $root "server.out.log"

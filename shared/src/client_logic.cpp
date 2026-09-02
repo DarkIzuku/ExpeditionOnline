@@ -155,6 +155,27 @@ auto appearance_asset_has_drift(const std::string &expected,
   return !expected.empty() && expected != observed;
 }
 
+auto should_reapply_visual_asset(const std::string &expected,
+                                 const std::string &observed,
+                                 bool component_ready) -> bool {
+  return component_ready && appearance_asset_has_drift(expected, observed);
+}
+
+auto is_customization_skin_mesh(const std::string &mesh_path,
+                                std::string_view expected_character) -> bool {
+  if (mesh_path.empty() || contains(mesh_path, "SKM_Quinn") ||
+      contains(mesh_path, "None.None") || contains(mesh_path, "FaceMesh") ||
+      contains(mesh_path, "Placeholder") ||
+      !contains(mesh_path, "/Game/Characters/Heros/") ||
+      !contains(mesh_path, "/Customization/Skin/")) {
+    return false;
+  }
+  const auto character = infer_character_from_body_mesh(mesh_path);
+  if (character == "Unknown")
+    return false;
+  return expected_character.empty() || character == expected_character;
+}
+
 auto appearance_apply_decision(bool body_requested, bool body_ready,
                                bool hair_requested, bool hair_ready,
                                std::size_t attempt,
@@ -203,10 +224,12 @@ auto jump_demo_movement_mode(std::string_view jump_phase) -> std::uint8_t {
 }
 
 auto score_appearance_candidate(const AppearanceCandidate &candidate) -> int {
-  if (candidate.component_leaf != "Body" || candidate.mesh_full_name.empty())
+  if (candidate.mesh_full_name.empty())
     return -1;
   if (contains(candidate.mesh_full_name, "SKM_Quinn") ||
-      contains(candidate.mesh_full_name, "None.None"))
+      contains(candidate.mesh_full_name, "None.None") ||
+      contains(candidate.mesh_full_name, "FaceMesh") ||
+      contains(candidate.mesh_full_name, "Placeholder"))
     return -1;
   if (!contains(candidate.mesh_full_name, "/Game/Characters/Heros/"))
     return -1;
@@ -217,7 +240,17 @@ auto score_appearance_candidate(const AppearanceCandidate &candidate) -> int {
     return -1;
   }
 
-  int score{170}; // Hero asset + exact Body leaf + recognized character.
+  const auto exact_body = candidate.component_leaf == "Body";
+  const auto dynamic_skin =
+      is_customization_skin_mesh(candidate.mesh_full_name);
+  if (!exact_body && !dynamic_skin)
+    return -1;
+  if (!exact_body && candidate.component_leaf == "CharacterMesh0")
+    return -1;
+
+  int score{exact_body ? 400 : 200};
+  if (candidate.selected_by_mesh_property && dynamic_skin)
+    score += 150;
   if (candidate.directly_owned_by_pawn)
     score += 30;
   if (candidate.owner_is_character_skin && candidate.related_to_pawn)
