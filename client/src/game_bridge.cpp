@@ -783,8 +783,11 @@ auto select_local_body_component(AActor *pawn, Logger *logger = nullptr)
     return selection;
 
   selection.reachable_actors = collect_reachable_visual_actors(pawn);
-  selection.candidates =
-      pawn->K2_GetComponentsByClass(skeletal_mesh_component_class).size();
+  for (auto *component :
+       pawn->K2_GetComponentsByClass(skeletal_mesh_component_class)) {
+    (void)component;
+    ++selection.candidates;
+  }
 
   if (auto *body = find_owned_skeletal_component(pawn, "Body");
       component_has_recognized_body(body)) {
@@ -2326,3 +2329,4 @@ auto GameBridge::destroy_all_remotes() -> void {
   remotes_.clear();
 }
 } // namespace expedition_online::client
+
