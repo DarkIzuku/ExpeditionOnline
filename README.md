@@ -16,6 +16,7 @@ La historia, las quests, el inventario y los archivos de save permanecen totalme
 - `main.dll`: cliente UE4SS nativo; se compila contra una revisión oficial fijada.
 - Unit tests e integración automática con servidor + Probe A + Probe B.
 - `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair), `TransformSnapshot` y `MovementState`.
+- La build rc2 instrumenta las señales ALS del salto real; no declara Jump normal resuelto hasta contrastar esos logs en runtime.
 - TCP-only en este MVP; `TransformSnapshot` queda separado para una futura ruta UDP.
 
 ## Funcionamiento
@@ -82,3 +83,4 @@ Sigue [docs/QUICK_TEST.md](docs/QUICK_TEST.md). La especificación completa est�
 - La locomoción depende de que el AnimBP existente del companion consuma `GetVelocity`; los logs `REMOTE_MOTION_SETUP` y `REMOTE_MOTION` exponen los valores observados para la prueba runtime.
 
 Para una fase futura quedan documentados los actores de batalla `BP_Maelle_Battle_C`, `BP_Verso_Battle2_C`, `BP_Sciel_Battle_C` y el patrón de armas `BP_WeaponSkin_<Character>_<Weapon>_C`.
+
