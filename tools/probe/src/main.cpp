@@ -36,6 +36,7 @@ struct Options {
   bool duration_explicit{};
   bool movement_demo{};
   bool jump_demo{};
+  bool idle_demo{};
   bool appearance_test{};
   bool show_help{};
 };
@@ -69,6 +70,9 @@ auto print_usage() -> void {
       << "  --movement-demo      Idle 5s, walk 10s, run 10s, stop 5s\n"
       << "  --jump-demo          Ground, ascend, apex, descend and land "
          "trajectory\n"
+      << "  --idle-demo          Hold one exact transform for 15 seconds "
+         "unless "
+         "--duration is set\n"
       << "  --appearance-test    Hold the literal outfit/hair for 60 seconds "
          "unless --duration is set\n"
       << "  --help              Show this help\n";
@@ -123,6 +127,8 @@ auto parse_options(int argc, char **argv) -> Options {
       options.movement_demo = true;
     else if (argument == "--jump-demo")
       options.jump_demo = true;
+    else if (argument == "--idle-demo")
+      options.idle_demo = true;
     else if (argument == "--appearance-test")
       options.appearance_test = true;
     else
@@ -144,6 +150,12 @@ auto parse_options(int argc, char **argv) -> Options {
     options.duration_seconds = 30;
   if (options.jump_demo && !options.movement_demo && !options.duration_explicit)
     options.duration_seconds = 10;
+  if (options.idle_demo && !options.duration_explicit)
+    options.duration_seconds = 15;
+  if (options.idle_demo) {
+    options.radius = 0.0F;
+    options.angular_speed = 0.0F;
+  }
   if (options.appearance_test && !options.duration_explicit)
     options.duration_seconds = 60;
   return options;
@@ -261,6 +273,12 @@ auto show_frame(const proto::Frame &frame) -> void {
               << static_cast<int>(value.custom_movement_mode);
     break;
   }
+  case proto::MessageType::jump_event: {
+    const auto value = proto::decode_jump_event(frame.payload);
+    std::cout << " player=" << value.player_id
+              << " jump_sequence=" << value.sequence;
+    break;
+  }
   case proto::MessageType::player_left:
     std::cout << " player="
               << proto::decode_player_left(frame.payload).player_id;
@@ -308,8 +326,8 @@ auto main(int argc, char **argv) -> int {
                    proto::AppearanceState{0, options.character, options.outfit,
                                           options.hair}));
     send_frame(socket,
-               proto::make_frame(proto::MessageType::movement_state,
-                                 sequence++, proto::MovementState{0, 1, 0}));
+               proto::make_frame(proto::MessageType::movement_state, sequence++,
+                                 proto::MovementState{0, 1, 0}));
     if (options.jump_demo)
       std::cout << "DEMO_MOVEMENT_STATE mode=1 custom=0\n";
     std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
@@ -321,9 +339,9 @@ auto main(int argc, char **argv) -> int {
               << " snapshot_hz=" << options.snapshot_hz
               << " movement_demo=" << (options.movement_demo ? "true" : "false")
               << " jump_demo=" << (options.jump_demo ? "true" : "false")
+              << " idle_demo=" << (options.idle_demo ? "true" : "false")
               << " appearance_test="
-              << (options.appearance_test ? "true" : "false")
-              << '\n';
+              << (options.appearance_test ? "true" : "false") << '\n';
 
     proto::FrameDecoder decoder;
     std::array<std::uint8_t, 64U * 1024U> buffer{};
@@ -332,6 +350,8 @@ auto main(int argc, char **argv) -> int {
     std::string last_movement_phase;
     std::string last_jump_phase;
     std::uint8_t last_movement_mode{1};
+    std::uint64_t jump_sequence{};
+    bool jump_event_sent{};
     while (std::chrono::steady_clock::now() - start <
            std::chrono::seconds(options.duration_seconds)) {
       const auto now = std::chrono::steady_clock::now();
@@ -348,12 +368,18 @@ auto main(int argc, char **argv) -> int {
         }
         const auto movement_mode =
             logic::jump_demo_movement_mode(demo.jump_phase);
+        if (options.jump_demo && !jump_event_sent && movement_mode == 3) {
+          ++jump_sequence;
+          send_frame(socket, proto::make_frame(
+                                 proto::MessageType::jump_event, sequence++,
+                                 proto::JumpEvent{0, jump_sequence}));
+          std::cout << "DEMO_JUMP_EVENT sequence=" << jump_sequence << '\n';
+          jump_event_sent = true;
+        }
         if (movement_mode != last_movement_mode) {
-          send_frame(socket,
-                     proto::make_frame(proto::MessageType::movement_state,
-                                       sequence++,
-                                       proto::MovementState{0, movement_mode,
-                                                            0}));
+          send_frame(socket, proto::make_frame(
+                                 proto::MessageType::movement_state, sequence++,
+                                 proto::MovementState{0, movement_mode, 0}));
           std::cout << "DEMO_MOVEMENT_STATE mode="
                     << static_cast<int>(movement_mode) << " custom=0\n";
           last_movement_mode = movement_mode;

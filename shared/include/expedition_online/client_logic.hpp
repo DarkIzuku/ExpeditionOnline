@@ -53,6 +53,10 @@ auto appearance_asset_has_drift(const std::string &expected,
 auto should_reapply_visual_asset(const std::string &expected,
                                  const std::string &observed,
                                  bool component_ready) -> bool;
+auto should_write_remote_visual(bool unsafe_write_enabled, bool asset_ready,
+                                bool component_ready) -> bool;
+auto should_disable_remote_movement_tick(bool network_authority_enabled)
+    -> bool;
 auto is_customization_skin_mesh(const std::string &mesh_path,
                                 std::string_view expected_character = {})
     -> bool;

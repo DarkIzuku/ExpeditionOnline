@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $serverExe) -or -not (Test-Path -LiteralPath $p
 
 $help = (& $probeExe --help 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "Probe --help failed with exit code $LASTEXITCODE" }
-foreach ($option in "--character", "--outfit", "--hair", "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed", "--snapshot-hz", "--movement-demo", "--jump-demo") {
+foreach ($option in "--character", "--outfit", "--hair", "--x", "--y", "--z", "--yaw", "--radius", "--angular-speed", "--snapshot-hz", "--movement-demo", "--jump-demo", "--idle-demo", "--appearance-test") {
     if ($help -notmatch [regex]::Escape($option)) { throw "Probe --help is missing $option" }
 }
 

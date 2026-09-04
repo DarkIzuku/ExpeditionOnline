@@ -60,10 +60,14 @@ auto test_payloads() -> void {
       proto::decode_movement_state(proto::encode(movement));
   check(decoded_movement.player_id == movement.player_id,
         "MovementState player_id");
-  check(decoded_movement.movement_mode == 3,
-        "MovementState movement_mode");
+  check(decoded_movement.movement_mode == 3, "MovementState movement_mode");
   check(decoded_movement.custom_movement_mode == 7,
         "MovementState custom_movement_mode");
+
+  const proto::JumpEvent jump{1234, 17};
+  const auto decoded_jump = proto::decode_jump_event(proto::encode(jump));
+  check(decoded_jump.player_id == jump.player_id, "JumpEvent player_id");
+  check(decoded_jump.sequence == jump.sequence, "JumpEvent sequence");
 }
 
 auto test_fragmented_frames() -> void {
@@ -101,7 +105,9 @@ auto test_rejections() -> void {
         "Ping empty payload helper");
   check(!proto::is_empty_payload_message(proto::MessageType::hello),
         "Hello is not empty payload");
-  check(proto::kProtocolVersion == 3, "protocol v3 capability boundary");
+  check(proto::is_known_message_type(proto::MessageType::jump_event),
+        "known JumpEvent type");
+  check(proto::kProtocolVersion == 4, "protocol v4 capability boundary");
 
   bool rejected{};
   try {
@@ -221,8 +227,7 @@ auto test_appearance_selection() -> void {
         "Pawn.Mesh customization skin accepted");
   check(logic::score_appearance_candidate(pawn_mesh) > 0,
         "local resolver accepts Pawn.Mesh dynamic component");
-  const auto dynamic_only =
-      logic::select_appearance_candidate({pawn_mesh});
+  const auto dynamic_only = logic::select_appearance_candidate({pawn_mesh});
   check(dynamic_only && *dynamic_only == 0,
         "remote resolver can select a dynamic Mesh property component");
   const auto body_first =
@@ -234,8 +239,7 @@ auto test_appearance_selection() -> void {
       "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/FaceMesh";
   check(logic::score_appearance_candidate(face) < 0, "Face mesh rejected");
   auto hair = pawn_mesh;
-  hair.mesh_full_name =
-      "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Hair";
+  hair.mesh_full_name = "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Hair";
   check(logic::score_appearance_candidate(hair) < 0, "Hair mesh rejected");
   auto placeholder = pawn_mesh;
   placeholder.mesh_full_name =
@@ -326,6 +330,13 @@ auto test_remote_asset_safety() -> void {
         "hair drift requests reapply when component is ready");
   check(!logic::should_reapply_visual_asset("OutfitA", "OutfitB", false),
         "missing component is resolved before drift reapply");
+  check(!logic::should_write_remote_visual(false, true, true),
+        "direct appearance write is disabled by default");
+  check(logic::should_write_remote_visual(true, true, true),
+        "unsafe appearance write requires explicit opt-in and ready inputs");
+  check(logic::should_disable_remote_movement_tick(true) &&
+            !logic::should_disable_remote_movement_tick(false),
+        "network authority controls only the remote movement tick policy");
 }
 } // namespace
 

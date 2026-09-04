@@ -24,9 +24,48 @@ foreach(required_marker IN ITEMS
         "CHARACTER_SKIN_PROPERTY"
         "REMOTE_OUTFIT_DRIFT"
         "LOCAL_JUMP_SIGNAL"
-        "LOCAL_JUMP_EVENT")
+        "LOCAL_JUMP_EVENT"
+        "LOCAL_JUMP_STARTED"
+        "REMOTE_JUMP_EVENT"
+        "REMOTE_TRANSFORM_DRIFT"
+        "REMOTE_NETWORK_AUTHORITY"
+        "REMOTE_APPEARANCE_DEFERRED"
+        "LOCAL_SKIN_EVENT"
+        "CSAP_SwapAssign")
     string(FIND "${game_bridge_source}" "${required_marker}" marker_position)
     if(marker_position EQUAL -1)
         message(FATAL_ERROR "GameBridge safety instrumentation is missing: ${required_marker}")
+    endif()
+endforeach()
+
+foreach(forbidden_call IN ITEMS
+        "LaunchCharacter"
+        "AddImpulse"
+        "AddForce")
+    string(FIND "${game_bridge_source}" "${forbidden_call}" forbidden_position)
+    if(NOT forbidden_position EQUAL -1)
+        message(FATAL_ERROR "Remote jump path must not add local physics: ${forbidden_call}")
+    endif()
+endforeach()
+
+file(READ "${CONFIG_HEADER}" config_header_source)
+foreach(default_marker IN ITEMS
+        "remote_network_authority{true}"
+        "unsafe_direct_appearance{false}"
+        "unsafe_direct_hair{false}")
+    string(FIND "${config_header_source}" "${default_marker}" default_position)
+    if(default_position EQUAL -1)
+        message(FATAL_ERROR "Crash-safe client default is missing: ${default_marker}")
+    endif()
+endforeach()
+
+file(READ "${CONFIG_EXAMPLE}" config_example_source)
+foreach(config_marker IN ITEMS
+        "remote_network_authority=true"
+        "unsafe_direct_appearance=false"
+        "unsafe_direct_hair=false")
+    string(FIND "${config_example_source}" "${config_marker}" config_position)
+    if(config_position EQUAL -1)
+        message(FATAL_ERROR "Packaged config is missing safe default: ${config_marker}")
     endif()
 endforeach()

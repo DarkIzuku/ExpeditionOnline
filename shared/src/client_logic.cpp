@@ -161,6 +161,16 @@ auto should_reapply_visual_asset(const std::string &expected,
   return component_ready && appearance_asset_has_drift(expected, observed);
 }
 
+auto should_write_remote_visual(bool unsafe_write_enabled, bool asset_ready,
+                                bool component_ready) -> bool {
+  return unsafe_write_enabled && asset_ready && component_ready;
+}
+
+auto should_disable_remote_movement_tick(bool network_authority_enabled)
+    -> bool {
+  return network_authority_enabled;
+}
+
 auto is_customization_skin_mesh(const std::string &mesh_path,
                                 std::string_view expected_character) -> bool {
   if (mesh_path.empty() || contains(mesh_path, "SKM_Quinn") ||

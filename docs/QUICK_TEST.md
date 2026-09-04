@@ -38,6 +38,9 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
    ServerHost=127.0.0.1
    ServerPort=7777
    interpolation_delay_ms=300
+   remote_network_authority=true
+   unsafe_direct_appearance=false
+   unsafe_direct_hair=false
    ```
 
 4. Ejecuta `Host/Start-Server.bat`.
@@ -70,9 +73,9 @@ Esta build es un MVP de exploración. No sincroniza combate, historia, quests, i
 
    El servidor también debe mostrar `PLAYER_CONNECTED`, `PLAYER_READY`, `PLAYER_ZONE_CHANGE` y tráfico de apariencia.
 
-El actor remoto es una instancia nueva e independiente. El mod detiene su AI y BrainComponent, desactiva el tick del AIController y la colisión, pero mantiene SkeletalMesh, AnimBP y CharacterMovement activos. Aplica transforms de red y destruye solo ese actor al desconectar. No modifica companions reales de la partida.
+El actor remoto es una instancia nueva e independiente. El mod detiene su AI y BrainComponent, desactiva el tick del AIController y la colisión. Con `remote_network_authority=true`, desactiva además únicamente el tick de CharacterMovement; Actor, SkeletalMesh y AnimBP permanecen activos, y Velocity/MovementMode siguen actualizándose manualmente. Aplica transforms de red y destruye solo ese actor al desconectar. No modifica companions reales de la partida.
 
-Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz 15`. Para probar Jump/Fall/Land usa `--jump-demo --snapshot-hz 15`; envía MovementMode `1 -> 3 -> 1`, sin animaciones explícitas.
+Para una secuencia automática de locomoción usa `--movement-demo --snapshot-hz 15`. Para probar Jump/Fall/Land usa `--jump-demo --snapshot-hz 15`; envía `MovementMode 1`, un único `JumpEvent`, `MovementMode 3` y finalmente `MovementMode 1`. El evento llama únicamente `ALSCharacterAnimInstance.OnJumped`, sin añadir física. Para medir un remoto completamente inmóvil usa `--idle-demo`.
 
 Para probar apariencia remota real, copia literalmente `outfit=` y `hair=` de una línea `LOCAL_APPEARANCE` y pásalos entre comillas:
 
@@ -80,7 +83,7 @@ Para probar apariencia remota real, copia literalmente `outfit=` y `hair=` de un
 ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name "Maelle Appearance A" --zone "<LOCAL_ZONE exacta>" --appearance-test --x <X> --y <Y> --z <Z> --yaw <YAW> --snapshot-hz 15 --character Maelle --outfit "SkeletalMesh /Game/Characters/Heros/Maelle/Customization/Skin/SK_Maelle_Esquie.SK_Maelle_Esquie" --hair "SkeletalMesh /Game/Characters/Hair/Heroes/Maelle/Maelle_Hair_ActeIII_Metahuman_skl.Maelle_Hair_ActeIII_Metahuman_skl"
 ```
 
-Antes de iniciarlo, deja la Maelle local con outfit/hair B/B distintos. Mientras el Probe continúa, cambia la Maelle local a otro C/C. El remoto debe conservar Esquie/ActeIII. Confirma `REMOTE_ASSET_RESOLVED`, dos verificaciones `REMOTE_HAIR_APPLIED requested=... observed=...` y, si el sistema global intenta sobrescribirlo, `REMOTE_HAIR_DRIFT` seguido de `reason=drift_reapply`. El Body solo se considera resuelto cuando también aparece `REMOTE_OUTFIT_APPLIED requested=... observed=...` y finalmente `REMOTE_APPEARANCE_APPLIED complete=true`.
+Con la configuración segura predeterminada esta prueba es solo diagnóstica: confirma `REMOTE_BODY_COMPONENT`, `REMOTE_ASSET_RESOLVED` y `REMOTE_APPEARANCE_DEFERRED`; no debe aparecer `complete=true` ni escribirse ningún mesh. Cambia el outfit local mientras está conectado y conserva `LOCAL_SKIN_EVENT`, `LOCAL_SKIN_PROPERTY_CHANGE`, `CHARACTER_SKIN_PROPERTY` y `REMOTE_SKIN_COMPONENT`. No actives los flags `unsafe_direct_*` en una prueba normal: la ruta directa de rc2 llegó a verificar los meshes y luego crasheó.
 
 El Probe conserva esos tres valores literalmente en `AppearanceState`; no intenta interpretarlos ni sustituirlos.
 
@@ -136,6 +139,7 @@ El Probe conserva esos tres valores literalmente en `AppearanceState`; no intent
 - Busca `REMOTE_INTERPOLATION`. `buffer` debe crecer, `delay_ms` debe coincidir con la configuración y `render_xyz` normalmente debe quedar entre snapshots, no saltar siempre a `target_xyz`.
 - Para Probe a 4 Hz usa 300 ms. Para clientes reales a 15 Hz usa 100-150 ms.
 - Si no llegan snapshots durante más de 750 ms, el actor conserva la última posición y su Velocity pasa a cero; no extrapola indefinidamente.
+- Ejecuta `--idle-demo` y busca `REMOTE_TRANSFORM_DRIFT`. `delta` mide cuánto movió Unreal el actor entre el transform aplicado en un tick y la lectura previa del siguiente. Compara `remote_network_authority=true` contra `false`; `REMOTE_NETWORK_AUTHORITY` y `REMOTE_MOVEMENT_COMPONENT_STATE` confirman qué tick sigue activo.
 
 ### El remoto se mueve pero permanece en idle
 
@@ -147,13 +151,13 @@ El Probe conserva esos tres valores literalmente en `AppearanceState`; no intent
 
 - Ejecuta el Probe con `--jump-demo --snapshot-hz 15` en la misma zona y posición base del cliente.
 - Debe emitir `DEMO_MOVEMENT_STATE mode=1`, después `mode=3` y finalmente `mode=1`.
-- En `ExpeditionOnline.log`, busca `REMOTE_MOVEMENT_STATE requested_mode=3 observed_mode=3 is_falling=true` y después `requested_mode=1 observed_mode=1 is_falling=false`.
-- Para descubrir la señal ALS que falta, haz además un salto real con el personaje local. Conserva las líneas `LOCAL_JUMP_SIGNAL`, `LOCAL_JUMP_EVENT` y `LOCAL_LAND_SIGNAL`; solo aparecen al cambiar una propiedad o al observar una función filtrada sobre el Pawn local, su movement component o sus AnimInstances.
-- La posición interpolada de red continúa siendo autoritativa. Esta build no llama `Jump()` ni reproduce montages a ciegas; la transición visual normal queda pendiente de identificar una señal inequívoca en esos logs.
+- Debe emitir exactamente una línea `DEMO_JUMP_EVENT sequence=1` antes de `DEMO_MOVEMENT_STATE mode=3`.
+- En `ExpeditionOnline.log`, busca `REMOTE_JUMP_EVENT ... target=...ALS... function=OnJumped success=true`, `REMOTE_JUMP_ANIM_STATE`, `REMOTE_MOVEMENT_STATE requested_mode=3 observed_mode=3 is_falling=true` y después `requested_mode=1 observed_mode=1 is_falling=false`.
+- La posición interpolada de red continúa siendo autoritativa. Esta build no llama `Jump()`, `LaunchCharacter`, impulses ni fuerzas. El resultado visual normal sigue pendiente de validar dentro del juego.
 
 ### Protocolo incompatible
 
-- Servidor, probe y mod deben mostrar `Protocol 3`. Sustituye juntos los tres binarios del mismo ZIP; v2 y v3 se rechazan limpiamente entre sí.
+- Servidor, probe y mod deben mostrar `Protocol 4`. Sustituye juntos los tres binarios del mismo ZIP; protocol 3 y 4 se rechazan limpiamente entre sí.
 
 ### Windows Firewall
 

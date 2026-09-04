@@ -1,6 +1,6 @@
 # ExpeditionOnline
 
-Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.4.0-rc2` instrumentation release candidate focuses on easy installation, smooth same-zone movement, independent remote cosmetics, post-skin-change outfit capture, jump-signal diagnostics, character changes, reconnect and diagnostics. Combat and shared progression are intentionally out of scope.
+Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.5.0-rc1` instrumentation release candidate adds a visual-only jump-start event, an experimental network-authority mode for remote jitter, and crash-safe diagnostics for the vanilla customization route. Direct remote mesh writes are disabled by default after the rc2 runtime crash. Combat and shared progression are intentionally out of scope.
 
 Normal users should start with [client quick start](docs/QUICK_START_CLIENT.md) or [host quick start](docs/QUICK_START_HOST.md). Technical scope, verified companions and remaining limitations are in [Exploration RC](docs/EXPLORATION_RC.md).
 
@@ -10,13 +10,13 @@ La historia, las quests, el inventario y los archivos de save permanecen totalme
 
 ## Estado
 
-- Protocolo binario TCP `EXON` v3, versionado y con límites de tamaño.
+- Protocolo binario TCP `EXON` v4, versionado y con límites de tamaño.
 - `ExpeditionOnlineServer.exe`: relay efímero solo entre jugadores de la misma zona.
 - `ExpeditionOnlineProbe.exe`: cliente de consola con posición base, yaw y movimiento circular configurables.
 - `main.dll`: cliente UE4SS nativo; se compila contra una revisión oficial fijada.
 - Unit tests e integración automática con servidor + Probe A + Probe B.
-- `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair), `TransformSnapshot` y `MovementState`.
-- La build rc2 instrumenta las señales ALS del salto real; no declara Jump normal resuelto hasta contrastar esos logs en runtime.
+- `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair), `TransformSnapshot`, `MovementState` y `JumpEvent`.
+- `JumpEvent` se genera solo desde `OnJumped` real y se entrega directamente al `ALSCharacterAnimInstance.OnJumped` remoto; no aplica física. La transición visual sigue pendiente de validación runtime.
 - TCP-only en este MVP; `TransformSnapshot` queda separado para una futura ruta UDP.
 
 ## Funcionamiento
@@ -31,9 +31,9 @@ En exploración, el cliente usa la arquitectura validada:
 - Apariencia: primero se usa el `SkeletalMeshComponent` exacto `Body`. Tras un cambio de skin, si desaparece, se valida `Pawn.Mesh` como el componente dinámico del outfit y después se hace un fallback con `K2_GetComponentsByClass` limitado al Pawn. Solo se aceptan meshes reconocidos bajo `/Game/Characters/Heros/<Character>/Customization/Skin/`; `SKM_Quinn`, `CharacterMesh0`, Face, Hair y Placeholder se rechazan. No se realizan scans globales de UObjects. El pelo se lee de `Haircut_SkeletalMesh`.
 - Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
 - El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
-- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto. `MovementState` replica solo MovementMode/CustomMovementMode cuando cambian para permitir probar Jump/Fall/Land; no se envían nombres, montages ni frames de animación.
+- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto. `MovementState` replica solo MovementMode/CustomMovementMode cuando cambian; `JumpEvent` aporta una única señal de inicio visual sin nombres, montages, frames ni fuerza física.
 
-Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan el tick del AIController y la colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. El actor, su SkeletalMesh, AnimBP y CharacterMovement siguen actualizándose. No se reutiliza ni altera un companion real.
+Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan el tick del AIController y la colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. Con `remote_network_authority=true` también se desactiva solo el tick de CharacterMovement, mientras Actor, SkeletalMesh y AnimBP permanecen activos y el mod continúa escribiendo Velocity/MovementMode. No se reutiliza ni altera un companion real.
 
 Cuando `PlayerController.Pawn` es `null`, el cliente considera que la exploración no está disponible y elimina sus remotos. Esto evita interferir con combate.
 
@@ -66,6 +66,9 @@ El artifact usa por defecto:
 ServerHost=127.0.0.1
 ServerPort=7777
 interpolation_delay_ms=100
+remote_network_authority=true
+unsafe_direct_appearance=false
+unsafe_direct_hair=false
 ```
 
 Para dos equipos, cambia `ServerHost` por la IP LAN del PC que ejecuta el servidor. No hardcodees ni publiques una IP pública.
@@ -81,6 +84,6 @@ Sigue [docs/QUICK_TEST.md](docs/QUICK_TEST.md). La especificación completa est�
 - Sin autenticación ni cifrado: usar solo en LAN/VPN de confianza.
 - Sin extrapolación prolongada: tras 750 ms sin snapshots la Velocity pasa a cero y se conserva la última posición.
 - La locomoción depende de que el AnimBP existente del companion consuma `GetVelocity`; los logs `REMOTE_MOTION_SETUP` y `REMOTE_MOTION` exponen los valores observados para la prueba runtime.
+- Outfit/Hair remotos independientes aún no están resueltos: rc2 localizó `CharacterMesh0`, cargó los assets y los aplicó, pero el juego crasheó inmediatamente. Esta RC carga y diagnostica los assets sin escribirlos por defecto mientras registra la ruta vanilla `BP_CharacterSkinComponent`/`CSAP_SwapAssign`.
 
 Para una fase futura quedan documentados los actores de batalla `BP_Maelle_Battle_C`, `BP_Verso_Battle2_C`, `BP_Sciel_Battle_C` y el patrón de armas `BP_WeaponSkin_<Character>_<Weapon>_C`.
-
