@@ -387,3 +387,24 @@ La evidencia sí justifica un cambio inmediato de bajo riesgo: el fast-path del 
 - No se accedió al servidor relay; su comportamiento autoritativo solo puede inferirse desde el cliente.
 - No se reprodujo el secreto incluido en el ZIP.
 - No se atribuye licencia ni se copia código fuente: este documento describe comportamiento observable, APIs, rutas y offsets para una reimplementación compatible.
+
+## Aplicación en Exploration vNext
+
+La rama `exploration-vnext` adopta la separación observada entre apariencia,
+contexto, locomoción y transform, pero conserva como autoridad de posición los
+snapshots con timestamp de ExpeditionOnline. Protocol 5 añade IDs vanilla de
+apariencia, contexto y locomoción rica en mensajes separados y cacheados para
+late join; `JumpEvent` sigue siendo transitorio y explícito.
+
+La reimplementación no fija el `0x50` observado: enumera de forma acotada
+`CharacterCustomizationItemData`, valida propiedades `FName`, obtiene el tipo
+y tamaño reales de `CharacterCustomization`, y compara ese mismo tipo contra
+el parámetro reflejado de `SetCharacterCustomization`. Cualquier desviación
+termina en fail-open. `CurrentCharacterWorld` se valida como `FName` y se
+restaura mediante guarda de ámbito alrededor del spawn.
+
+Los campos `traversalState`, `mantleStart` y `montagePos`, junto con las rutas
+de mantle, grapple, climb, ladder y rope encontradas en el binario, no se
+implementan en esta build. No quedó demostrado un ABI estable ni una ventaja
+que justifique poner en riesgo el core de exploración, apariencia, salto y
+world-map.

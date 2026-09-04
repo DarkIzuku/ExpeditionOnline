@@ -34,7 +34,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase {
 public:
   ExpeditionOnlineMod() {
     ModName = STR("ExpeditionOnline");
-    ModVersion = STR("0.5.0-rc1");
+    ModVersion = STR("0.6.0-rc1");
     ModDescription = STR("Exploration-only online co-op relay prototype for "
                          "Clair Obscur: Expedition 33");
     ModAuthors = STR("ExpeditionOnline contributors");
@@ -63,15 +63,21 @@ public:
       const auto root = mod_root();
       logger_ = std::make_unique<Logger>(root / "ExpeditionOnline.log");
       config_ = load_client_config(root / "config" / "config.ini");
-      logger_->info(build_info::identity("Client", protocol::kProtocolVersion) +
-                    " server=" + config_.host + ':' +
-                    std::to_string(config_.port) +
-                    " remote_network_authority=" +
-                    (config_.remote_network_authority ? "true" : "false") +
-                    " unsafe_direct_appearance=" +
-                    (config_.unsafe_direct_appearance ? "true" : "false") +
-                    " unsafe_direct_hair=" +
-                    (config_.unsafe_direct_hair ? "true" : "false"));
+      logger_->info(
+          build_info::identity("Client", protocol::kProtocolVersion) +
+          " server=" + config_.host + ':' + std::to_string(config_.port) +
+          " remote_network_authority=" +
+          (config_.remote_network_authority ? "true" : "false") +
+          " remote_actor_mode=" + config_.remote_actor_mode +
+          " remote_use_movement_input=" +
+          (config_.remote_use_movement_input ? "true" : "false") +
+          " vanilla_customization=" +
+          (config_.vanilla_customization ? "true" : "false") +
+          " world_map_remote=" + (config_.world_map_remote ? "true" : "false") +
+          " unsafe_direct_appearance=" +
+          (config_.unsafe_direct_appearance ? "true" : "false") +
+          " unsafe_direct_hair=" +
+          (config_.unsafe_direct_hair ? "true" : "false"));
       network_ = std::make_unique<NetworkClient>(config_, *logger_);
       bridge_ = std::make_unique<GameBridge>(config_, *network_, *logger_);
       network_->start();
@@ -79,9 +85,28 @@ public:
       hook_id_ = RC::Unreal::Hook::RegisterProcessEventPostCallback(
           [this](auto &, RC::Unreal::UObject *object,
                  RC::Unreal::UFunction *function, void *) {
-            if (bridge_) {
-              bridge_->observe_process_event(object, function);
-              bridge_->tick();
+            try {
+              if (bridge_) {
+                bridge_->observe_process_event(object, function);
+                bridge_->tick();
+              }
+            } catch (const std::exception &exception) {
+              if (logger_) {
+                try {
+                  logger_->error(
+                      std::string("GAME_BRIDGE_EXCEPTION ") +
+                      "stage=process_event_callback error=" + exception.what());
+                } catch (...) {
+                }
+              }
+            } catch (...) {
+              if (logger_) {
+                try {
+                  logger_->error("GAME_BRIDGE_EXCEPTION "
+                                 "stage=process_event_callback error=unknown");
+                } catch (...) {
+                }
+              }
             }
           },
           {false, false, STR("ExpeditionOnline"), STR("GameThreadBridge")});

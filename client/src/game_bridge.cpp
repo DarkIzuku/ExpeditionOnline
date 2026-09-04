@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -137,6 +138,429 @@ auto bool_property(UObject *object, const std::string &property_name)
   return object->GetValuePtrByPropertyNameInChain<bool>(wide_name.c_str());
 }
 
+auto rotator_property(UObject *object, const std::string &property_name)
+    -> FRotator * {
+  if (!object_is_valid(object))
+    return nullptr;
+  const auto wide_name = widen(property_name);
+  return object->GetValuePtrByPropertyNameInChain<FRotator>(wide_name.c_str());
+}
+
+auto folded(std::string value) -> std::string;
+
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+auto reflected_property(UObject *object, std::string_view wanted)
+    -> RC::Unreal::FProperty * {
+  if (!object_is_valid(object))
+    return nullptr;
+  std::size_t visited{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           object->GetClassPrivate(),
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (narrow(property->GetName()) == wanted)
+      return property;
+    if (++visited >= 512)
+      break;
+  }
+  return nullptr;
+}
+
+auto reflected_fname_property(UObject *object, std::string_view name)
+    -> RC::Unreal::FName * {
+  auto *property = reflected_property(object, name);
+  if (!property || !property->IsA<RC::Unreal::FNameProperty>())
+    return nullptr;
+  return property->ContainerPtrToValuePtr<RC::Unreal::FName>(object);
+}
+
+auto parameter_bounds_are_valid(RC::Unreal::UFunction *function,
+                                RC::Unreal::FProperty *property) -> bool {
+  if (!function || !property)
+    return false;
+  const auto offset = static_cast<std::size_t>(property->GetOffset_Internal());
+  const auto size = static_cast<std::size_t>(property->GetSize());
+  return offset <= function->GetParmsSize() &&
+         size <= function->GetParmsSize() - offset;
+}
+
+auto call_fname_input_validated(UObject *object,
+                                const std::string &function_name,
+                                const std::string &value) -> bool {
+  if (!object_is_valid(object) || value.empty())
+    return false;
+  auto *function =
+      object->GetFunctionByNameInChain(widen(function_name).c_str());
+  if (!function || function->GetParmsSize() == 0 ||
+      function->GetParmsSize() > 4096)
+    return false;
+  RC::Unreal::FProperty *input{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           function, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_Parm) ||
+        property->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm))
+      continue;
+    if (input || !property->IsA<RC::Unreal::FNameProperty>() ||
+        !parameter_bounds_are_valid(function, property))
+      return false;
+    input = property;
+  }
+  if (!input)
+    return false;
+  std::vector<std::uint8_t> params(function->GetParmsSize());
+  auto *target =
+      input->ContainerPtrToValuePtr<RC::Unreal::FName>(params.data());
+  if (!target)
+    return false;
+  *target = RC::Unreal::FName(widen(value).c_str(), RC::Unreal::FNAME_Add);
+  object->ProcessEvent(function, params.data());
+  return true;
+}
+
+auto call_fname_object_return_validated(UObject *object,
+                                        const std::string &function_name,
+                                        const std::string &value) -> UObject * {
+  if (!object_is_valid(object) || value.empty())
+    return nullptr;
+  auto *function =
+      object->GetFunctionByNameInChain(widen(function_name).c_str());
+  if (!function || function->GetParmsSize() == 0 ||
+      function->GetParmsSize() > 4096)
+    return nullptr;
+  RC::Unreal::FProperty *input{};
+  RC::Unreal::FProperty *output{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           function, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_Parm))
+      continue;
+    if (!parameter_bounds_are_valid(function, property))
+      return nullptr;
+    if (property->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm)) {
+      if (output || !property->IsA<RC::Unreal::FObjectProperty>())
+        return nullptr;
+      output = property;
+    } else {
+      if (input || !property->IsA<RC::Unreal::FNameProperty>())
+        return nullptr;
+      input = property;
+    }
+  }
+  if (!input || !output)
+    return nullptr;
+  std::vector<std::uint8_t> params(function->GetParmsSize());
+  auto *target =
+      input->ContainerPtrToValuePtr<RC::Unreal::FName>(params.data());
+  if (!target)
+    return nullptr;
+  *target = RC::Unreal::FName(widen(value).c_str(), RC::Unreal::FNAME_Add);
+  object->ProcessEvent(function, params.data());
+  auto **result = output->ContainerPtrToValuePtr<UObject *>(params.data());
+  return result && object_is_valid(*result) ? *result : nullptr;
+}
+
+auto call_no_args_validated(UObject *object, const std::string &function_name)
+    -> bool {
+  if (!object_is_valid(object))
+    return false;
+  auto *function =
+      object->GetFunctionByNameInChain(widen(function_name).c_str());
+  if (!function || function->GetParmsSize() != 0)
+    return false;
+  object->ProcessEvent(function, nullptr);
+  return true;
+}
+
+auto call_byte_input_validated(UObject *object,
+                               const std::string &function_name,
+                               std::uint8_t value) -> bool {
+  if (!object_is_valid(object))
+    return false;
+  auto *function =
+      object->GetFunctionByNameInChain(widen(function_name).c_str());
+  if (!function || function->GetParmsSize() == 0 ||
+      function->GetParmsSize() > 64)
+    return false;
+  RC::Unreal::FProperty *input{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           function, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_Parm) ||
+        property->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm))
+      continue;
+    const auto enum_like = property->IsA<RC::Unreal::FByteProperty>() ||
+                           property->IsA<RC::Unreal::FEnumProperty>();
+    if (input || !enum_like || property->GetSize() != 1 ||
+        !parameter_bounds_are_valid(function, property))
+      return false;
+    input = property;
+  }
+  if (!input)
+    return false;
+  std::vector<std::uint8_t> params(function->GetParmsSize());
+  auto *target = input->ContainerPtrToValuePtr<std::uint8_t>(params.data());
+  if (!target)
+    return false;
+  *target = value;
+  object->ProcessEvent(function, params.data());
+  return true;
+}
+
+auto find_character_data(UObject *game_instance,
+                         const std::string &character_id) -> UObject * {
+  if (auto *data = call_fname_object_return_validated(
+          game_instance, "GetCharacterByID", character_id))
+    return data;
+  if (auto *data = call_fname_object_return_validated(
+          game_instance, "InitCharacterData", character_id))
+    return data;
+  std::size_t visited{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           game_instance->GetClassPrivate(),
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (++visited > 128)
+      break;
+    if (!property->IsA<RC::Unreal::FObjectProperty>())
+      continue;
+    auto **candidate =
+        property->ContainerPtrToValuePtr<UObject *>(game_instance);
+    if (!candidate || !object_is_valid(*candidate) ||
+        object_name((*candidate)->GetClassPrivate())
+                .find("AC_jRPG_CharactersManager") == std::string::npos)
+      continue;
+    if (auto *data = call_fname_object_return_validated(
+            *candidate, "GetCharacterByID", character_id))
+      return data;
+    return call_fname_object_return_validated(*candidate, "InitCharacterData",
+                                              character_id);
+  }
+  return nullptr;
+}
+
+auto read_item_customization_ids(UObject *character_data, std::string &skin,
+                                 std::string &face) -> bool {
+  auto *property =
+      reflected_property(character_data, "CharacterCustomizationItemData");
+  if (!property || !property->IsA<RC::Unreal::FStructProperty>())
+    return false;
+  auto *struct_property = static_cast<RC::Unreal::FStructProperty *>(property);
+  auto *data = property->ContainerPtrToValuePtr<void>(character_data);
+  auto *type = struct_property->GetStruct();
+  if (!data || !type || type->GetStructureSize() <= 0 ||
+      type->GetStructureSize() > 4096)
+    return false;
+  std::size_t visited{};
+  for (auto *field : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           type, RC::Unreal::EFieldIterationFlags::IncludeSuper |
+                     RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (++visited > 64)
+      break;
+    if (!field->IsA<RC::Unreal::FNameProperty>())
+      continue;
+    const auto name = folded(narrow(field->GetName()));
+    auto *value = field->ContainerPtrToValuePtr<RC::Unreal::FName>(data);
+    if (!value)
+      continue;
+    if (skin.empty() && (name.find("skin") != std::string::npos ||
+                         name.find("outfit") != std::string::npos))
+      skin = narrow(value->ToString());
+    if (face.empty() && (name.find("face") != std::string::npos ||
+                         name.find("hair") != std::string::npos))
+      face = narrow(value->ToString());
+  }
+  return !skin.empty() || !face.empty();
+}
+
+auto apply_vanilla_customization(UObject *actor,
+                                 const protocol::AppearanceState &appearance,
+                                 std::string &reason) -> bool {
+  auto *game_instance = UObjectGlobals::FindFirstOf(L"BP_jRPG_GI_Custom_C");
+  if (!object_is_valid(game_instance)) {
+    reason = "game_instance_missing";
+    return false;
+  }
+  auto *character_data =
+      find_character_data(game_instance, appearance.character_id);
+  if (!object_is_valid(character_data)) {
+    reason = "character_data_missing";
+    return false;
+  }
+  if (!call_fname_input_validated(character_data, "LoadCharacterBaseDataFromID",
+                                  appearance.character_id)) {
+    reason = "LoadCharacterBaseDataFromID_signature";
+    return false;
+  }
+  auto *item_property =
+      reflected_property(character_data, "CharacterCustomizationItemData");
+  if (!item_property || !item_property->IsA<RC::Unreal::FStructProperty>()) {
+    reason = "CharacterCustomizationItemData_missing";
+    return false;
+  }
+  auto *item_type =
+      static_cast<RC::Unreal::FStructProperty *>(item_property)->GetStruct();
+  auto *item_data = item_property->ContainerPtrToValuePtr<void>(character_data);
+  if (!item_type || !item_data || item_type->GetStructureSize() <= 0 ||
+      item_type->GetStructureSize() > 4096) {
+    reason = "CharacterCustomizationItemData_invalid";
+    return false;
+  }
+  bool skin_written = appearance.customization_skin.empty();
+  bool face_written = appearance.customization_face.empty();
+  std::size_t visited{};
+  for (auto *field : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           item_type,
+           RC::Unreal::EFieldIterationFlags::IncludeSuper |
+               RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (++visited > 64)
+      break;
+    if (!field->IsA<RC::Unreal::FNameProperty>())
+      continue;
+    const auto name = folded(narrow(field->GetName()));
+    auto *target = field->ContainerPtrToValuePtr<RC::Unreal::FName>(item_data);
+    if (!target)
+      continue;
+    if (!skin_written && (name.find("skin") != std::string::npos ||
+                          name.find("outfit") != std::string::npos)) {
+      *target = RC::Unreal::FName(widen(appearance.customization_skin).c_str(),
+                                  RC::Unreal::FNAME_Add);
+      skin_written = true;
+    } else if (!face_written && (name.find("face") != std::string::npos ||
+                                 name.find("hair") != std::string::npos)) {
+      *target = RC::Unreal::FName(widen(appearance.customization_face).c_str(),
+                                  RC::Unreal::FNAME_Add);
+      face_written = true;
+    }
+  }
+  if (!skin_written || !face_written) {
+    reason = "customization_FName_fields_not_confirmed";
+    return false;
+  }
+  if (!call_no_args_validated(character_data,
+                              "LoadCharacterCustomizationFromItemData")) {
+    reason = "LoadCharacterCustomizationFromItemData_signature";
+    return false;
+  }
+  auto *source_property =
+      reflected_property(character_data, "CharacterCustomization");
+  if (!source_property ||
+      !source_property->IsA<RC::Unreal::FStructProperty>()) {
+    reason = "CharacterCustomization_missing";
+    return false;
+  }
+  auto *source_type =
+      static_cast<RC::Unreal::FStructProperty *>(source_property)->GetStruct();
+  auto *source = source_property->ContainerPtrToValuePtr<void>(character_data);
+  auto *function =
+      actor->GetFunctionByNameInChain(L"SetCharacterCustomization");
+  if (!source_type || !source || !function || function->GetParmsSize() == 0 ||
+      function->GetParmsSize() > 4096) {
+    reason = "SetCharacterCustomization_missing";
+    return false;
+  }
+  RC::Unreal::FProperty *customization_input{};
+  RC::Unreal::FProperty *character_input{};
+  for (auto *param : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           function, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (!param->HasAnyPropertyFlags(RC::Unreal::CPF_Parm) ||
+        param->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm))
+      continue;
+    if (!parameter_bounds_are_valid(function, param)) {
+      reason = "SetCharacterCustomization_bounds";
+      return false;
+    }
+    if (param->IsA<RC::Unreal::FStructProperty>()) {
+      auto *target_type =
+          static_cast<RC::Unreal::FStructProperty *>(param)->GetStruct();
+      if (customization_input || target_type != source_type ||
+          param->GetSize() != source_property->GetSize()) {
+        reason = "SetCharacterCustomization_struct_type";
+        return false;
+      }
+      customization_input = param;
+    } else if (param->IsA<RC::Unreal::FNameProperty>()) {
+      if (character_input) {
+        reason = "SetCharacterCustomization_FName_count";
+        return false;
+      }
+      character_input = param;
+    } else {
+      reason = "SetCharacterCustomization_unexpected_param";
+      return false;
+    }
+  }
+  if (!customization_input || !character_input) {
+    reason = "SetCharacterCustomization_params";
+    return false;
+  }
+  std::vector<std::uint8_t> params(function->GetParmsSize());
+  auto *target_customization =
+      customization_input->ContainerPtrToValuePtr<void>(params.data());
+  auto *target_character =
+      character_input->ContainerPtrToValuePtr<RC::Unreal::FName>(params.data());
+  if (!target_customization || !target_character) {
+    reason = "SetCharacterCustomization_param_ptr";
+    return false;
+  }
+  std::memcpy(target_customization, source,
+              static_cast<std::size_t>(source_property->GetSize()));
+  *target_character = RC::Unreal::FName(widen(appearance.character_id).c_str(),
+                                        RC::Unreal::FNAME_Add);
+  actor->ProcessEvent(function, params.data());
+  reason = "ok";
+  return true;
+}
+
+auto capture_vanilla_appearance(std::uint64_t player_id, std::string &reason)
+    -> protocol::AppearanceState {
+  protocol::AppearanceState result;
+  result.player_id = player_id;
+  auto *game_instance = UObjectGlobals::FindFirstOf(L"BP_jRPG_GI_Custom_C");
+  if (!object_is_valid(game_instance)) {
+    reason = "game_instance_missing";
+    return result;
+  }
+  auto *current =
+      reflected_fname_property(game_instance, "CurrentCharacterWorld");
+  if (!current) {
+    reason = "CurrentCharacterWorld_not_FName";
+    return result;
+  }
+  result.character_id = narrow(current->ToString());
+  if (result.character_id.empty() || result.character_id == "None") {
+    reason = "CurrentCharacterWorld_empty";
+    result.character_id.clear();
+    return result;
+  }
+  auto *character_data =
+      find_character_data(game_instance, result.character_id);
+  if (!object_is_valid(character_data)) {
+    reason = "character_data_missing";
+    return result;
+  }
+  if (!read_item_customization_ids(character_data, result.customization_skin,
+                                   result.customization_face)) {
+    reason = "customization_FName_fields_not_confirmed";
+    return result;
+  }
+  reason = "ok";
+  return result;
+}
+#else
+auto call_byte_input_validated(UObject *, const std::string &, std::uint8_t)
+    -> bool {
+  return false;
+}
+auto apply_vanilla_customization(UObject *, const protocol::AppearanceState &,
+                                 std::string &reason) -> bool {
+  reason = "reflection_unavailable";
+  return false;
+}
+auto capture_vanilla_appearance(std::uint64_t player_id, std::string &reason)
+    -> protocol::AppearanceState {
+  reason = "reflection_unavailable";
+  return protocol::AppearanceState{player_id, {}, {}, {}};
+}
+#endif
+
 auto set_object_property(UObject *object, const std::string &property_name,
                          UObject *value) -> bool {
   if (!object_is_valid(object) || !object_is_valid(value))
@@ -208,6 +632,38 @@ auto call_bool_return(UObject *object, const std::string &function_name,
   return true;
 }
 
+auto call_bool_return_validated(UObject *object,
+                                const std::string &function_name, bool &result)
+    -> bool {
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+  if (!object_is_valid(object))
+    return false;
+  auto *function =
+      object->GetFunctionByNameInChain(widen(function_name).c_str());
+  if (!function || function->GetParmsSize() == 0 ||
+      function->GetParmsSize() > 16)
+    return false;
+  std::size_t returns{};
+  for (auto *property : RC::Unreal::TFieldRange<RC::Unreal::FProperty>(
+           function, RC::Unreal::EFieldIterationFlags::IncludeDeprecated)) {
+    if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_Parm))
+      continue;
+    if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm) ||
+        !property->IsA<RC::Unreal::FBoolProperty>() ||
+        property->GetOffset_Internal() != 0 ||
+        !parameter_bounds_are_valid(function, property))
+      return false;
+    ++returns;
+  }
+  return returns == 1 && call_bool_return(object, function_name, result);
+#else
+  (void)object;
+  (void)function_name;
+  (void)result;
+  return false;
+#endif
+}
+
 auto call_bool_input(UObject *object, const std::string &function_name,
                      bool value) -> bool {
   if (!object_is_valid(object))
@@ -258,9 +714,38 @@ auto class_leaf(std::string full_name) -> std::string {
 
 auto same_appearance(const protocol::AppearanceState &left,
                      const protocol::AppearanceState &right) -> bool {
-  return left.character_class == right.character_class &&
-         left.outfit_mesh == right.outfit_mesh &&
-         left.hair_mesh == right.hair_mesh;
+  return left.character_id == right.character_id &&
+         left.customization_skin == right.customization_skin &&
+         left.customization_face == right.customization_face;
+}
+
+auto same_locomotion(const protocol::PlayerLocomotionState &left,
+                     const protocol::PlayerLocomotionState &right) -> bool {
+  return left.movement_mode == right.movement_mode &&
+         left.locomotion_state == right.locomotion_state &&
+         left.gait == right.gait && left.stance == right.stance &&
+         left.sprinting == right.sprinting &&
+         left.crouching == right.crouching && left.aiming == right.aiming &&
+         std::fabs(left.aim_pitch - right.aim_pitch) < 0.5F;
+}
+
+auto first_byte_property(UObject *object,
+                         std::initializer_list<const char *> names)
+    -> std::uint8_t * {
+  for (const auto *name : names) {
+    if (auto *value = byte_property(object, name))
+      return value;
+  }
+  return nullptr;
+}
+
+auto first_bool_property(UObject *object,
+                         std::initializer_list<const char *> names) -> bool * {
+  for (const auto *name : names) {
+    if (auto *value = bool_property(object, name))
+      return value;
+  }
+  return nullptr;
 }
 
 auto is_skeletal_mesh_component(UObject *object) -> bool {
@@ -1185,18 +1670,14 @@ auto is_relevant_jump_function(const std::string &name) -> bool {
   return is_jump_start_function(name) || name == "OnLanded" ||
          name == "Multicast_OnLanded" ||
          name.find("MovementModeChanged") != std::string::npos ||
-         name.find("Airborne") != std::string::npos ||
-         name.find("Falling") != std::string::npos;
+         name.find("Airborne") != std::string::npos;
 }
 
 auto is_relevant_skin_function(const std::string &name) -> bool {
-  const auto lower = folded(name);
-  if (lower.find("tick") != std::string::npos ||
-      lower.find("evaluategraph") != std::string::npos ||
-      lower.find("executeubergraph") != std::string::npos) {
-    return false;
-  }
-  return true;
+  return name == "OnBodySkinAssigned" || name == "OnFaceSkinAssigned" ||
+         name == "OnSkinAssignCompleted" ||
+         name == "LoadCharacterCustomizationFromItemData" ||
+         name == "SetCharacterCustomization";
 }
 
 auto read_filtered_jump_signals(UObject *owner, std::string_view role)
@@ -1286,6 +1767,7 @@ auto GameBridge::tick() -> void {
   next_bridge_tick_ = now + std::chrono::milliseconds(16);
 
   in_bridge_tick = true;
+  const char *stage = "connection_state";
   try {
     const auto connected = network_.connected();
     if (network_was_connected_ && !connected) {
@@ -1297,11 +1779,24 @@ auto GameBridge::tick() -> void {
                       "reconnect_pending=true");
     }
     network_was_connected_ = connected;
+    stage = "process_incoming";
     process_incoming();
+    stage = "update_local_player";
     update_local_player();
+    stage = "update_remote_players";
     update_remote_players();
   } catch (const std::exception &exception) {
-    logger_.error(std::string("GAME_BRIDGE_EXCEPTION ") + exception.what());
+    try {
+      logger_.error(std::string("GAME_BRIDGE_EXCEPTION stage=") + stage +
+                    " error=" + exception.what());
+    } catch (...) {
+    }
+  } catch (...) {
+    try {
+      logger_.error(std::string("GAME_BRIDGE_EXCEPTION stage=") + stage +
+                    " error=unknown");
+    } catch (...) {
+    }
   }
   in_bridge_tick = false;
 }
@@ -1314,8 +1809,7 @@ auto GameBridge::observe_process_event(UObject *object, UFunction *function)
     return;
   const auto skin = local_skin_objects_.find(object);
   const auto tracked = local_jump_objects_.find(object);
-  if (skin == local_skin_objects_.end() &&
-      tracked == local_jump_objects_.end())
+  if (skin == local_skin_objects_.end() && tracked == local_jump_objects_.end())
     return;
   const auto function_name = object_leaf_name(function_object);
   const auto now = std::chrono::steady_clock::now();
@@ -1333,6 +1827,7 @@ auto GameBridge::observe_process_event(UObject *object, UFunction *function)
                    " role=" + skin->second +
                    " function=" + object_name(function_object));
       log_character_skin_properties(logger_, "local", local_player_id_, object);
+      next_appearance_capture_ = {};
     }
   }
 
@@ -1388,6 +1883,7 @@ auto GameBridge::process_incoming() -> void {
     case protocol::MessageType::welcome: {
       destroy_all_remotes();
       local_player_id_ = protocol::decode_welcome(frame.payload).player_id;
+      last_sent_context_.reset();
       resync_requested_ = true;
       logger_.info("WELCOME player_id=" + std::to_string(local_player_id_));
       break;
@@ -1419,35 +1915,17 @@ auto GameBridge::process_incoming() -> void {
       auto &remote = remotes_[state.player_id];
       logger_.info("REMOTE_APPEARANCE_RECEIVED player=" +
                    std::to_string(state.player_id) +
-                   " character=" + state.character_class +
-                   " outfit=" + state.outfit_mesh + " hair=" + state.hair_mesh);
+                   " character_id=" + state.character_id +
+                   " customization_skin=" + state.customization_skin +
+                   " customization_face=" + state.customization_face);
       const auto old_character =
-          remote.appearance ? class_leaf(remote.appearance->character_class)
-                            : std::string{};
-      const auto new_character = class_leaf(state.character_class);
+          remote.appearance ? remote.appearance->character_id : std::string{};
+      const auto new_character = state.character_id;
       if (!old_character.empty() && old_character != new_character) {
         logger_.info("REMOTE_CHARACTER_CHANGED player=" +
                      std::to_string(state.player_id) + " old=" + old_character +
                      " new=" + new_character);
-        if (object_is_valid(remote.actor))
-          remote.actor->K2_DestroyActor();
-        remote.actor = nullptr;
-        remote.movement_component = nullptr;
-        remote.body_component = nullptr;
-        remote.hair_component = nullptr;
-        remote.expected_body_mesh = nullptr;
-        remote.expected_hair_mesh = nullptr;
-        remote.locomotion_anim_instance = nullptr;
-        remote.skin_component = nullptr;
-        remote.body_verification_pending = false;
-        remote.hair_verification_pending = false;
-        remote.body_route.clear();
-        remote.hair_route.clear();
-        remote.spawned_character.clear();
-        remote.visual_mesh_snapshot.clear();
-        remote.visual_snapshot_initialized = false;
-        remote.network_authority_configured = false;
-        remote.transform_drift_initialized = false;
+        destroy_remote_actor(state.player_id, remote, false);
         remote.character_respawn_pending = true;
       }
       remote.appearance = state;
@@ -1459,6 +1937,24 @@ auto GameBridge::process_incoming() -> void {
       remote.appearance_attempt_count = 0;
       remote.next_appearance_retry = {};
       remote.fallback_warning_logged = false;
+      break;
+    }
+    case protocol::MessageType::player_context_state: {
+      const auto state = protocol::decode_player_context_state(frame.payload);
+      if (state.player_id == local_player_id_ ||
+          !protocol::is_valid_player_context(state.context))
+        break;
+      auto &remote = remotes_[state.player_id];
+      const auto previous = remote.context;
+      if (logic::context_requires_actor_reset(previous, state.context)) {
+        destroy_remote_actor(state.player_id, remote, true);
+        remote.context = state.context;
+        logger_.info(
+            "REMOTE_CONTEXT_CHANGED player=" + std::to_string(state.player_id) +
+            " old=" + protocol::player_context_name(previous) +
+            " new=" + protocol::player_context_name(state.context) +
+            " interpolation_reset=true");
+      }
       break;
     }
     case protocol::MessageType::movement_state: {
@@ -1474,6 +1970,18 @@ auto GameBridge::process_incoming() -> void {
       auto &remote = remotes_[state.player_id];
       remote.movement_state = state;
       remote.movement_state_dirty = true;
+      break;
+    }
+    case protocol::MessageType::player_locomotion_state: {
+      const auto state =
+          protocol::decode_player_locomotion_state(frame.payload);
+      if (state.player_id == local_player_id_ || state.movement_mode > 6 ||
+          !std::isfinite(state.aim_pitch) ||
+          std::fabs(state.aim_pitch) > 180.0F)
+        break;
+      auto &remote = remotes_[state.player_id];
+      remote.locomotion_state = state;
+      remote.locomotion_state_dirty = true;
       break;
     }
     case protocol::MessageType::jump_event: {
@@ -1500,6 +2008,26 @@ auto GameBridge::process_incoming() -> void {
       const auto advances_stream =
           remote.snapshots.empty() ||
           state.timestamp_ms >= remote.snapshots.back().timestamp_ms;
+      if (advances_stream && !remote.snapshots.empty() &&
+          logic::snapshot_exceeds_teleport_threshold(
+              remote.snapshots.back(), state,
+              config_.teleport_threshold_units)) {
+        const auto previous = remote.snapshots.back();
+        remote.snapshots.clear();
+        remote.last_rendered_transform = state;
+        remote.velocity_x = 0.0F;
+        remote.velocity_y = 0.0F;
+        remote.velocity_z = 0.0F;
+        remote.speed = 0.0F;
+        remote.clock_offset_initialized = false;
+        logger_.info(
+            "REMOTE_TELEPORT player=" + std::to_string(state.player_id) +
+            " from=" + std::to_string(previous.x) + "," +
+            std::to_string(previous.y) + "," + std::to_string(previous.z) +
+            " to=" + std::to_string(state.x) + "," + std::to_string(state.y) +
+            "," + std::to_string(state.z) +
+            " threshold=" + std::to_string(config_.teleport_threshold_units));
+      }
       logic::insert_snapshot(remote.snapshots, state);
       if (!advances_stream)
         break;
@@ -1557,6 +2085,17 @@ auto GameBridge::process_incoming() -> void {
 
 auto GameBridge::update_local_player() -> void {
   auto *pawn = find_local_pawn();
+  if (detected_context_ != local_context_) {
+    const auto previous = local_context_;
+    for (auto &[player_id, remote] : remotes_)
+      destroy_remote_actor(player_id, remote, true);
+    local_context_ = detected_context_;
+    resync_requested_ = true;
+    logger_.info(std::string("LOCAL_CONTEXT old=") +
+                 protocol::player_context_name(previous) +
+                 " new=" + protocol::player_context_name(local_context_) +
+                 " interpolation_reset=true");
+  }
   if (!pawn) {
     local_visual_pawn_ = nullptr;
     local_body_component_ = nullptr;
@@ -1565,6 +2104,7 @@ auto GameBridge::update_local_player() -> void {
     local_visual_route_diagnostic_logged_ = false;
     local_movement_state_initialized_ = false;
     local_movement_state_.reset();
+    local_locomotion_state_.reset();
     last_local_movement_signature_.clear();
     local_jump_signals_.clear();
     local_jump_objects_.clear();
@@ -1574,9 +2114,22 @@ auto GameBridge::update_local_player() -> void {
     next_local_jump_scan_ = {};
     if (exploration_available_) {
       exploration_available_ = false;
-      destroy_all_remotes();
       logger_.info("EXPLORATION_UNAVAILABLE Pawn=nil; combat synchronization "
                    "is intentionally disabled");
+    }
+    const auto had_zone = !local_zone_.empty();
+    local_zone_.clear();
+    if (network_.connected() && local_player_id_ != 0 &&
+        (resync_requested_ || had_zone || !last_sent_context_ ||
+         *last_sent_context_ != local_context_)) {
+      network_.enqueue(protocol::make_frame(
+          protocol::MessageType::zone_state, network_.next_sequence(),
+          protocol::ZoneState{local_player_id_, {}}));
+      network_.enqueue(protocol::make_frame(
+          protocol::MessageType::player_context_state, network_.next_sequence(),
+          protocol::PlayerContextState{local_player_id_, local_context_}));
+      last_sent_context_ = local_context_;
+      resync_requested_ = false;
     }
     return;
   }
@@ -1601,6 +2154,13 @@ auto GameBridge::update_local_player() -> void {
         protocol::MessageType::zone_state, network_.next_sequence(),
         protocol::ZoneState{local_player_id_, local_zone_}));
   }
+  if (network_.connected() && (resync_requested_ || !last_sent_context_ ||
+                               *last_sent_context_ != local_context_)) {
+    network_.enqueue(protocol::make_frame(
+        protocol::MessageType::player_context_state, network_.next_sequence(),
+        protocol::PlayerContextState{local_player_id_, local_context_}));
+    last_sent_context_ = local_context_;
+  }
 
   const auto now = std::chrono::steady_clock::now();
   if (local_visual_pawn_ != pawn) {
@@ -1609,13 +2169,15 @@ auto GameBridge::update_local_player() -> void {
     local_movement_component_ = nullptr;
     local_movement_state_initialized_ = false;
     local_movement_state_.reset();
+    local_locomotion_state_.reset();
     last_local_movement_signature_.clear();
     local_jump_objects_.clear();
     local_skin_objects_.clear();
     local_skin_signals_.clear();
   }
   bool appearance_changed{};
-  if (now >= next_appearance_capture_) {
+  if (local_context_ == protocol::PlayerContext::exploration &&
+      now >= next_appearance_capture_) {
     const auto candidate = capture_appearance(pawn);
     const auto effective =
         logic::select_effective_appearance(local_appearance_, candidate);
@@ -1632,7 +2194,7 @@ auto GameBridge::update_local_player() -> void {
                     appearance_failure_count_));
       if (now >= next_appearance_pending_log_) {
         next_appearance_pending_log_ = now + std::chrono::seconds(2);
-        logger_.info("LOCAL_APPEARANCE_PENDING reason=body_not_ready");
+        logger_.info("LOCAL_APPEARANCE_PENDING reason=vanilla_ids_not_ready");
       }
     }
   }
@@ -1642,9 +2204,13 @@ auto GameBridge::update_local_player() -> void {
         protocol::make_frame(protocol::MessageType::appearance_state,
                              network_.next_sequence(), *local_appearance_));
     logger_.info(
-        "LOCAL_APPEARANCE character=" + local_appearance_->character_class +
-        " outfit=" + local_appearance_->outfit_mesh +
-        " hair=" + local_appearance_->hair_mesh);
+        "LOCAL_APPEARANCE character_id=" + local_appearance_->character_id +
+        " customization_skin=" + local_appearance_->customization_skin +
+        " customization_face=" + local_appearance_->customization_face);
+    logger_.info("LOCAL_CHARACTER_ID value=" + local_appearance_->character_id);
+    logger_.info(
+        "LOCAL_CUSTOMIZATION skin=" + local_appearance_->customization_skin +
+        " face=" + local_appearance_->customization_face);
   }
   const auto location = pawn->K2_GetActorLocation();
   const auto rotation = pawn->K2_GetActorRotation();
@@ -1706,6 +2272,74 @@ auto GameBridge::update_local_player() -> void {
                                network_.next_sequence(), current_movement));
     }
   }
+  if (config_.sync_locomotion_state) {
+    const auto speed = horizontal_speed(local_velocity.X(), local_velocity.Y(),
+                                        local_velocity.Z());
+    const auto *reflected_locomotion = first_byte_property(
+        pawn, {"LocomotionState", "CurrentLocomotionState", "MovementState"});
+    const auto *reflected_gait =
+        first_byte_property(pawn, {"DesiredGait", "Gait", "ActualGait"});
+    const auto *reflected_stance =
+        first_byte_property(pawn, {"DesiredStance", "Stance", "ActualStance"});
+    const auto *reflected_sprinting = first_bool_property(
+        pawn, {"bIsSprinting", "IsSprinting", "bSprinting"});
+    const auto *reflected_crouching =
+        first_bool_property(pawn, {"bIsCrouched", "IsCrouching", "bCrouching"});
+    auto *free_aim = object_property(pawn, "BP_FreeAimControlComponent");
+    if (!object_is_valid(free_aim))
+      free_aim = object_property(pawn, "FreeAimControlComponent");
+    bool aiming{};
+    if (config_.sync_aim && object_is_valid(free_aim))
+      (void)call_bool_return_validated(free_aim, "IsInFreeAimMode", aiming);
+    float aim_pitch{};
+    if (aiming) {
+      if (const auto *aim_rotation =
+              rotator_property(free_aim, "CachedAimingRotation"))
+        aim_pitch = std::clamp(aim_rotation->GetPitch(), -180.0F, 180.0F);
+    }
+    const auto fallback_locomotion =
+        has_local_is_falling && local_is_falling
+            ? std::uint8_t{2}
+            : (speed >= 1.0F ? std::uint8_t{1} : std::uint8_t{0});
+    const auto fallback_gait = speed < 1.0F     ? std::uint8_t{0}
+                               : speed < 300.0F ? std::uint8_t{1}
+                               : speed < 600.0F ? std::uint8_t{2}
+                                                : std::uint8_t{3};
+    const auto crouching =
+        config_.sync_crouch && reflected_crouching && *reflected_crouching;
+    protocol::PlayerLocomotionState current_locomotion{
+        local_player_id_,
+        local_movement_mode ? *local_movement_mode : std::uint8_t{0},
+        reflected_locomotion ? *reflected_locomotion : fallback_locomotion,
+        config_.sync_gait && reflected_gait ? *reflected_gait : fallback_gait,
+        config_.sync_crouch && reflected_stance
+            ? *reflected_stance
+            : (crouching ? std::uint8_t{1} : std::uint8_t{0}),
+        reflected_sprinting ? *reflected_sprinting : fallback_gait == 3,
+        crouching,
+        aiming,
+        aim_pitch};
+    const auto locomotion_changed =
+        !local_locomotion_state_ ||
+        !same_locomotion(*local_locomotion_state_, current_locomotion);
+    local_locomotion_state_ = current_locomotion;
+    if (network_.connected() && (resync_requested_ || locomotion_changed)) {
+      network_.enqueue(
+          protocol::make_frame(protocol::MessageType::player_locomotion_state,
+                               network_.next_sequence(), current_locomotion));
+      logger_.info(
+          "LOCAL_LOCOMOTION movement_mode=" +
+          std::to_string(current_locomotion.movement_mode) +
+          " locomotion_state=" +
+          std::to_string(current_locomotion.locomotion_state) +
+          " gait=" + std::to_string(current_locomotion.gait) +
+          " stance=" + std::to_string(current_locomotion.stance) +
+          " sprinting=" + (current_locomotion.sprinting ? "true" : "false") +
+          " crouching=" + (current_locomotion.crouching ? "true" : "false") +
+          " aiming=" + (current_locomotion.aiming ? "true" : "false") +
+          " aim_pitch=" + std::to_string(current_locomotion.aim_pitch));
+    }
+  }
   update_local_jump_diagnostics(pawn);
   resync_requested_ = false;
   if (now >= next_local_transform_log_) {
@@ -1739,11 +2373,17 @@ auto GameBridge::update_local_player() -> void {
 }
 
 auto GameBridge::update_remote_players() -> void {
-  if (!exploration_available_ || local_zone_.empty())
+  if (!exploration_available_ || local_zone_.empty() ||
+      !logic::context_supports_remote_actor(local_context_))
     return;
   for (auto &[player_id, remote] : remotes_) {
-    if (remote.zone != local_zone_ || remote.snapshots.empty())
+    if (remote.zone != local_zone_ || remote.snapshots.empty() ||
+        remote.context != local_context_ ||
+        !logic::context_supports_remote_actor(remote.context)) {
+      if (object_is_valid(remote.actor))
+        destroy_remote_actor(player_id, remote, false);
       continue;
+    }
     if (!ensure_remote_actor(player_id, remote))
       continue;
     configure_remote_network_authority(player_id, remote);
@@ -1751,6 +2391,8 @@ auto GameBridge::update_remote_players() -> void {
       apply_remote_appearance(player_id, remote);
     if (remote.movement_state_dirty)
       apply_remote_movement_state(player_id, remote);
+    if (remote.locomotion_state_dirty)
+      apply_remote_locomotion_state(player_id, remote);
     apply_remote_jump_events(player_id, remote);
     apply_remote_transform(player_id, remote);
     verify_remote_visual_state(player_id, remote);
@@ -1758,17 +2400,34 @@ auto GameBridge::update_remote_players() -> void {
 }
 
 auto GameBridge::find_local_pawn() -> AActor * {
+  detected_context_ = protocol::PlayerContext::unavailable;
   const auto controller_name = widen(config_.controller_class);
   auto *controller = UObjectGlobals::FindFirstOf(controller_name.c_str());
   auto *pawn = object_property(controller, config_.pawn_property);
-  return object_is_valid(pawn) ? static_cast<AActor *>(pawn) : nullptr;
+  if (object_is_valid(pawn)) {
+    detected_context_ = protocol::PlayerContext::exploration;
+    return static_cast<AActor *>(pawn);
+  }
+  if (config_.world_map_remote) {
+    const auto world_map_controller = widen(config_.world_map_controller_class);
+    controller = UObjectGlobals::FindFirstOf(world_map_controller.c_str());
+    pawn = object_property(controller, config_.pawn_property);
+    if (object_is_valid(pawn)) {
+      detected_context_ = protocol::PlayerContext::world_map;
+      return static_cast<AActor *>(pawn);
+    }
+  }
+  return nullptr;
 }
 
 auto GameBridge::current_zone(AActor *pawn) -> std::string {
   if (!object_is_valid(pawn))
     return {};
-  if (auto *level = pawn->GetLevel(); object_is_valid(level))
+  if (auto *level = pawn->GetLevel(); object_is_valid(level)) {
+    if (auto *package = level->GetOutermost(); object_is_valid(package))
+      return narrow(package->GetFullName());
     return narrow(level->GetFullName());
+  }
   if (auto *world = pawn->GetWorld(); object_is_valid(world))
     return narrow(world->GetFullName());
   return {};
@@ -1918,14 +2577,14 @@ auto GameBridge::capture_appearance(AActor *pawn) -> protocol::AppearanceState {
                                       pawn, config_.hair_component_property);
   }
 
-  protocol::AppearanceState appearance;
-  appearance.player_id = local_player_id_;
+  std::string vanilla_reason;
+  auto appearance =
+      capture_vanilla_appearance(local_player_id_, vanilla_reason);
   auto *body_mesh = body_selection.mesh;
-  appearance.outfit_mesh = object_name(body_mesh);
-  appearance.hair_mesh = object_name(
-      object_property(local_hair_component_, config_.mesh_asset_property));
-  appearance.character_class =
-      logic::infer_character_from_body_mesh(appearance.outfit_mesh);
+  if (appearance.character_id.empty() &&
+      std::chrono::steady_clock::now() >= next_appearance_pending_log_) {
+    logger_.info("LOCAL_VANILLA_APPEARANCE_PENDING reason=" + vanilla_reason);
+  }
 
   const auto body_component_log = object_is_valid(local_body_component_)
                                       ? object_name(local_body_component_)
@@ -1988,49 +2647,58 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
   if (!local_pawn || remote.snapshots.empty())
     return nullptr;
 
-  std::string class_spec = config_.default_companion_class;
-  std::string mapped_character;
-  if (remote.appearance) {
-    const auto character = class_leaf(remote.appearance->character_class);
-    bool mapped{};
-    if (const auto found = config_.companion_by_character.find(character);
-        found != config_.companion_by_character.end()) {
+  const auto wants_world_map =
+      remote.context == protocol::PlayerContext::world_map;
+  auto use_legacy =
+      !wants_world_map && config_.remote_actor_mode == "ai_companion_legacy";
+  if (!wants_world_map && !remote.appearance)
+    return nullptr;
+  std::string class_spec = wants_world_map ? config_.world_map_character_class
+                                           : config_.world_character_class;
+  std::string mapped_character =
+      remote.appearance ? remote.appearance->character_id : std::string{};
+  if (use_legacy) {
+    class_spec = config_.default_companion_class;
+    if (const auto found =
+            config_.companion_by_character.find(mapped_character);
+        found != config_.companion_by_character.end())
       class_spec = found->second;
-      mapped = true;
-      mapped_character = character;
-    } else {
-      const auto visual_signature = remote.appearance->character_class + ' ' +
-                                    remote.appearance->outfit_mesh + ' ' +
-                                    remote.appearance->hair_mesh;
-      for (const auto &[token, companion_class] :
-           config_.companion_by_character) {
-        if (visual_signature.find(token) != std::string::npos) {
-          class_spec = companion_class;
-          mapped = true;
-          mapped_character = token;
-          break;
-        }
-      }
-    }
-    if (!mapped && !remote.fallback_warning_logged) {
-      remote.fallback_warning_logged = true;
-      logger_.warning("REMOTE_CHARACTER_UNKNOWN player=" +
-                      std::to_string(player_id) + " character=" + character +
-                      " fallback=" + config_.default_companion_class);
-    }
   }
 
-  UClass *actor_class{};
-  if (!class_spec.empty() && class_spec.front() == '/') {
-    const auto class_path = widen(class_spec);
-    actor_class = UObjectGlobals::StaticFindObject<UClass *>(
-        nullptr, nullptr, class_path.c_str());
-  } else {
-    const auto short_name = widen(class_spec);
-    if (auto *template_actor = UObjectGlobals::FindFirstOf(short_name.c_str());
-        object_is_valid(template_actor)) {
-      actor_class = template_actor->GetClassPrivate();
+  const auto resolve_class = [&](const std::string &spec) -> UClass * {
+    if (!spec.empty() && spec.front() == '/') {
+      const auto class_path = widen(spec);
+      if (auto *found = UObjectGlobals::StaticFindObject<UClass *>(
+              nullptr, nullptr, class_path.c_str());
+          object_is_valid(found))
+        return found;
+      const auto expected_leaf = class_leaf(spec);
+      if (object_name(local_pawn->GetClassPrivate()).find(expected_leaf) !=
+          std::string::npos)
+        return local_pawn->GetClassPrivate();
+      return nullptr;
     }
+    const auto short_name = widen(spec);
+    if (auto *template_actor = UObjectGlobals::FindFirstOf(short_name.c_str());
+        object_is_valid(template_actor))
+      return template_actor->GetClassPrivate();
+    return nullptr;
+  };
+
+  auto *actor_class = resolve_class(class_spec);
+  if (!actor_class && !wants_world_map && !use_legacy &&
+      config_.fallback_ai_companion) {
+    use_legacy = true;
+    class_spec = config_.default_companion_class;
+    if (const auto found =
+            config_.companion_by_character.find(mapped_character);
+        found != config_.companion_by_character.end())
+      class_spec = found->second;
+    actor_class = resolve_class(class_spec);
+    logger_.warning(
+        "REMOTE_BACKEND_FALLBACK player=" + std::to_string(player_id) +
+        " from=world_character to=ai_companion_legacy reason="
+        "world_character_class_unavailable");
   }
   if (!actor_class) {
     logger_.warning("REMOTE_SPAWN_WAIT player=" + std::to_string(player_id) +
@@ -2046,6 +2714,37 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
                           : remote.snapshots.back();
   FVector location(state.x, state.y, state.z);
   FRotator rotation(state.pitch, state.yaw, state.roll);
+
+#if EXPEDITION_HAS_UE4SS_REFLECTION
+  struct CurrentCharacterGuard {
+    RC::Unreal::FName *property{};
+    RC::Unreal::FName previous{};
+    ~CurrentCharacterGuard() {
+      if (property)
+        *property = previous;
+    }
+  } character_guard;
+  if (!use_legacy && !wants_world_map && remote.appearance) {
+    auto *game_instance = UObjectGlobals::FindFirstOf(L"BP_jRPG_GI_Custom_C");
+    character_guard.property =
+        reflected_fname_property(game_instance, "CurrentCharacterWorld");
+    if (!character_guard.property) {
+      logger_.warning("REMOTE_SPAWN_WAIT player=" + std::to_string(player_id) +
+                      " class=" + class_spec +
+                      " reason=CurrentCharacterWorld_not_validated");
+      return nullptr;
+    }
+    character_guard.previous = *character_guard.property;
+    *character_guard.property = RC::Unreal::FName(
+        widen(remote.appearance->character_id).c_str(), RC::Unreal::FNAME_Add);
+  }
+#else
+  if (!use_legacy && !wants_world_map) {
+    logger_.warning("REMOTE_SPAWN_WAIT player=" + std::to_string(player_id) +
+                    " class=" + class_spec + " reason=reflection_unavailable");
+    return nullptr;
+  }
+#endif
   remote.actor = world->SpawnActor(actor_class, &location, &rotation);
   if (!object_is_valid(remote.actor)) {
     remote.actor = nullptr;
@@ -2065,6 +2764,9 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
   remote.body_route.clear();
   remote.hair_route.clear();
   remote.spawned_character = mapped_character;
+  remote.backend = wants_world_map ? "world_map"
+                                   : (use_legacy ? "ai_companion_legacy"
+                                                 : "world_character");
   remote.visual_mesh_snapshot.clear();
   remote.visual_snapshot_initialized = false;
   remote.body_verification_pending = false;
@@ -2101,14 +2803,16 @@ auto GameBridge::ensure_remote_actor(std::uint64_t player_id,
                       : nullptr));
   remote.appearance_dirty = true;
   remote.movement_state_dirty = remote.movement_state.has_value();
+  remote.locomotion_state_dirty = remote.locomotion_state.has_value();
   logger_.info("REMOTE_SPAWNED player=" + std::to_string(player_id) +
+               " backend=" + remote.backend +
                " actor=" + object_name(remote.actor));
   if (remote.character_respawn_pending) {
     remote.character_respawn_pending = false;
     logger_.info(
         "REMOTE_CHARACTER_RESPAWN player=" + std::to_string(player_id) +
         " character=" +
-        (remote.appearance ? remote.appearance->character_class : "Unknown") +
+        (remote.appearance ? remote.appearance->character_id : "Unknown") +
         " actor=" + object_name(remote.actor));
   }
   return remote.actor;
@@ -2370,6 +3074,56 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
   const auto now = std::chrono::steady_clock::now();
   if (now < remote.next_appearance_retry)
     return;
+  if (!config_.vanilla_customization || remote.backend != "world_character") {
+    remote.appearance_dirty = false;
+    logger_.warning(
+        "REMOTE_APPEARANCE_FAIL_OPEN player=" + std::to_string(player_id) +
+        " reason=" +
+        (!config_.vanilla_customization ? "vanilla_customization_disabled"
+                                        : "backend_not_world_character") +
+        " backend=" + remote.backend);
+    return;
+  }
+
+  ++remote.appearance_attempt_count;
+  std::string reason;
+  if (apply_vanilla_customization(remote.actor, *remote.appearance, reason)) {
+    remote.appearance_dirty = false;
+    logger_.info(
+        "REMOTE_CUSTOMIZATION_APPLIED player=" + std::to_string(player_id) +
+        " character_id=" + remote.appearance->character_id +
+        " customization_skin=" + remote.appearance->customization_skin +
+        " customization_face=" + remote.appearance->customization_face +
+        " route=SetCharacterCustomization reflection_validated=true");
+    return;
+  }
+
+  if (remote.appearance_attempt_count < 10) {
+    const auto delay_ms =
+        logic::appearance_retry_delay_ms(remote.appearance_attempt_count);
+    remote.next_appearance_retry = now + std::chrono::milliseconds(delay_ms);
+    logger_.info(
+        "REMOTE_CUSTOMIZATION_RETRY player=" + std::to_string(player_id) +
+        " attempt=" + std::to_string(remote.appearance_attempt_count) +
+        " delay_ms=" + std::to_string(delay_ms) + " reason=" + reason);
+    return;
+  }
+  remote.appearance_dirty = false;
+  logger_.warning(
+      "REMOTE_APPEARANCE_FAIL_OPEN player=" + std::to_string(player_id) +
+      " route=SetCharacterCustomization attempts=" +
+      std::to_string(remote.appearance_attempt_count) + " reason=" + reason);
+}
+
+#if 0
+auto apply_remote_appearance_direct_legacy(std::uint64_t player_id,
+                                           GameBridge::RemotePlayer &remote)
+    -> void {
+  if (!object_is_valid(remote.actor) || !remote.appearance)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (now < remote.next_appearance_retry)
+    return;
 
   const auto first_attempt = remote.appearance_attempt_count == 0;
   const auto requested_character =
@@ -2598,6 +3352,8 @@ auto GameBridge::apply_remote_appearance(std::uint64_t player_id,
                " actor=" + object_name(remote.actor));
 }
 
+#endif
+
 auto GameBridge::apply_remote_movement_state(std::uint64_t player_id,
                                              RemotePlayer &remote) -> void {
   if (!object_is_valid(remote.actor) || !remote.movement_state)
@@ -2635,6 +3391,51 @@ auto GameBridge::apply_remote_movement_state(std::uint64_t player_id,
       " is_falling=" +
       (has_is_falling ? (is_falling ? "true" : "false") : "unavailable"));
   remote.movement_state_dirty = false;
+}
+
+auto GameBridge::apply_remote_locomotion_state(std::uint64_t player_id,
+                                               RemotePlayer &remote) -> void {
+  if (!object_is_valid(remote.actor) || !remote.locomotion_state)
+    return;
+  const auto &state = *remote.locomotion_state;
+  const auto movement_state_applied =
+      config_.sync_locomotion_state &&
+      call_byte_input_validated(remote.actor, "SetMovementState",
+                                state.locomotion_state);
+  const auto gait_applied =
+      config_.sync_gait &&
+      call_byte_input_validated(remote.actor, "SetDesiredGait", state.gait);
+  const auto stance_applied =
+      config_.sync_crouch &&
+      call_byte_input_validated(remote.actor, "SetStance", state.stance);
+
+  logger_.info("REMOTE_LOCOMOTION player=" + std::to_string(player_id) +
+               " backend=" + remote.backend +
+               " movement_mode=" + std::to_string(state.movement_mode) +
+               " locomotion_state=" + std::to_string(state.locomotion_state) +
+               " gait=" + std::to_string(state.gait) +
+               " stance=" + std::to_string(state.stance) +
+               " sprinting=" + (state.sprinting ? "true" : "false") +
+               " crouching=" + (state.crouching ? "true" : "false") +
+               " aiming=" + (state.aiming ? "true" : "false") + " aim_pitch=" +
+               std::to_string(state.aim_pitch) + " SetMovementState=" +
+               (movement_state_applied ? "applied" : "unavailable") +
+               " SetDesiredGait=" + (gait_applied ? "applied" : "unavailable") +
+               " SetStance=" + (stance_applied ? "applied" : "unavailable") +
+               " movement_input=false");
+  if (!movement_state_applied && !gait_applied && !stance_applied &&
+      !remote.locomotion_warning_logged) {
+    remote.locomotion_warning_logged = true;
+    logger_.warning(
+        "REMOTE_LOCOMOTION_FAIL_OPEN player=" + std::to_string(player_id) +
+        " reason=validated_vanilla_functions_unavailable");
+  }
+  if (state.aiming && config_.sync_aim && !remote.locomotion_warning_logged) {
+    remote.locomotion_warning_logged = true;
+    logger_.warning("REMOTE_AIM_FAIL_OPEN player=" + std::to_string(player_id) +
+                    " reason=visual_aim_setter_not_validated");
+  }
+  remote.locomotion_state_dirty = false;
 }
 
 auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
@@ -2699,6 +3500,7 @@ auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
   if (visual_drift)
     log_remote_skeletal_inventory(logger_, player_id, reachable_actors);
 
+#if 0
   if (config_.unsafe_direct_hair &&
       object_is_valid(remote.expected_hair_mesh) &&
       object_is_valid(remote.hair_component)) {
@@ -2733,7 +3535,7 @@ auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
   if (config_.unsafe_direct_appearance &&
       object_is_valid(remote.expected_body_mesh) && remote.appearance) {
     const auto selection = select_remote_body_component(
-        remote.actor, class_leaf(remote.appearance->character_class), nullptr,
+        remote.actor, remote.appearance->character_id, nullptr,
         player_id);
     if (object_is_valid(selection.component)) {
       remote.body_component = selection.component;
@@ -2774,6 +3576,7 @@ auto GameBridge::verify_remote_visual_state(std::uint64_t player_id,
       }
     }
   }
+#endif
   remote.visual_mesh_snapshot = collect_visual_mesh_snapshot(reachable_actors);
 }
 
@@ -2781,6 +3584,17 @@ auto GameBridge::disable_remote_ai(AActor *actor) -> void {
   if (!object_is_valid(actor))
     return;
   actor->SetActorEnableCollision(false);
+  actor->SetActorTickEnabled(true);
+  if (auto *mesh = object_property(actor, "Mesh"); object_is_valid(mesh))
+    (void)call_bool_input(mesh, "SetComponentTickEnabled", true);
+  auto *companion_manager =
+      object_property(actor, "BP_AICompanion_CompanionManager");
+  if (!object_is_valid(companion_manager))
+    companion_manager = object_property(actor, "AICompanion_CompanionManager");
+  if (auto *enabled =
+          bool_property(companion_manager, "SpawnCompanionsEnabled"))
+    *enabled = false;
+  (void)call_no_args(companion_manager, "UnspawnAICompanions");
   auto *controller = object_property(actor, config_.controller_property);
   call_no_args(controller, "StopMovement");
   if (object_is_valid(controller)) {
@@ -2792,14 +3606,57 @@ auto GameBridge::disable_remote_ai(AActor *actor) -> void {
   }
 }
 
+auto GameBridge::destroy_remote_actor(std::uint64_t player_id,
+                                      RemotePlayer &remote,
+                                      bool reset_interpolation) -> void {
+  if (object_is_valid(remote.actor)) {
+    remote.actor->K2_DestroyActor();
+    logger_.info("REMOTE_ACTOR_DESTROYED player=" + std::to_string(player_id) +
+                 " backend=" + remote.backend);
+  }
+  remote.actor = nullptr;
+  remote.movement_component = nullptr;
+  remote.body_component = nullptr;
+  remote.hair_component = nullptr;
+  remote.expected_body_mesh = nullptr;
+  remote.expected_hair_mesh = nullptr;
+  remote.locomotion_anim_instance = nullptr;
+  remote.skin_component = nullptr;
+  remote.body_route.clear();
+  remote.hair_route.clear();
+  remote.spawned_character.clear();
+  remote.backend.clear();
+  remote.visual_mesh_snapshot.clear();
+  remote.visual_snapshot_initialized = false;
+  remote.body_verification_pending = false;
+  remote.hair_verification_pending = false;
+  remote.network_authority_configured = false;
+  remote.transform_drift_initialized = false;
+  remote.locomotion_warning_logged = false;
+  remote.jump_target_warning_logged = false;
+  remote.appearance_attempt_count = 0;
+  remote.next_appearance_retry = {};
+  remote.appearance_dirty = remote.appearance.has_value();
+  remote.movement_state_dirty = remote.movement_state.has_value();
+  remote.locomotion_state_dirty = remote.locomotion_state.has_value();
+  if (reset_interpolation) {
+    remote.snapshots.clear();
+    remote.last_rendered_transform.reset();
+    remote.clock_offset_initialized = false;
+    remote.last_transform_received_ms = 0;
+    remote.velocity_x = 0.0F;
+    remote.velocity_y = 0.0F;
+    remote.velocity_z = 0.0F;
+    remote.speed = 0.0F;
+  }
+}
+
 auto GameBridge::destroy_remote(std::uint64_t player_id) -> void {
   const auto found = remotes_.find(player_id);
   if (found == remotes_.end())
     return;
-  if (object_is_valid(found->second.actor)) {
-    found->second.actor->K2_DestroyActor();
-    logger_.info("REMOTE_DESTROYED player=" + std::to_string(player_id));
-  }
+  destroy_remote_actor(player_id, found->second, false);
+  logger_.info("REMOTE_DESTROYED player=" + std::to_string(player_id));
   remotes_.erase(found);
 }
 

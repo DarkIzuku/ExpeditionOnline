@@ -81,12 +81,39 @@ auto load_client_config(const std::filesystem::path &path) -> ClientConfig {
       config.server_timeout_seconds = std::clamp(std::stoi(value), 3, 300);
     else if (key == "remote_network_authority")
       config.remote_network_authority = parse_bool(value);
+    else if (key == "remote_use_movement_input")
+      config.remote_use_movement_input = parse_bool(value);
+    else if (key == "fallback_ai_companion")
+      config.fallback_ai_companion = parse_bool(value);
+    else if (key == "vanilla_customization")
+      config.vanilla_customization = parse_bool(value);
+    else if (key == "world_map_remote")
+      config.world_map_remote = parse_bool(value);
+    else if (key == "sync_locomotion_state")
+      config.sync_locomotion_state = parse_bool(value);
+    else if (key == "sync_gait")
+      config.sync_gait = parse_bool(value);
+    else if (key == "sync_crouch")
+      config.sync_crouch = parse_bool(value);
+    else if (key == "sync_aim")
+      config.sync_aim = parse_bool(value);
     else if (key == "unsafe_direct_appearance")
       config.unsafe_direct_appearance = parse_bool(value);
     else if (key == "unsafe_direct_hair")
       config.unsafe_direct_hair = parse_bool(value);
+    else if (key == "teleport_threshold_units")
+      config.teleport_threshold_units =
+          std::clamp(std::stof(value), 100.0F, 1000000.0F);
+    else if (key == "remote_actor_mode")
+      config.remote_actor_mode = value;
     else if (key == "controller_class")
       config.controller_class = value;
+    else if (key == "world_map_controller_class")
+      config.world_map_controller_class = value;
+    else if (key == "world_character_class")
+      config.world_character_class = value;
+    else if (key == "world_map_character_class")
+      config.world_map_character_class = value;
     else if (key == "pawn_property")
       config.pawn_property = value;
     else if (key == "body_component_property")

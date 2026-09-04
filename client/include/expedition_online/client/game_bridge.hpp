@@ -36,8 +36,10 @@ public:
 private:
   struct RemotePlayer {
     std::string zone;
+    protocol::PlayerContext context{protocol::PlayerContext::unavailable};
     std::optional<protocol::AppearanceState> appearance;
     std::optional<protocol::MovementState> movement_state;
+    std::optional<protocol::PlayerLocomotionState> locomotion_state;
     std::deque<protocol::JumpEvent> jump_events;
     std::deque<protocol::TransformSnapshot> snapshots;
     std::optional<protocol::TransformSnapshot> last_rendered_transform;
@@ -52,6 +54,7 @@ private:
     std::string body_route;
     std::string hair_route;
     std::string spawned_character;
+    std::string backend;
     std::unordered_map<std::string, std::string> visual_mesh_snapshot;
     float velocity_x{};
     float velocity_y{};
@@ -64,6 +67,8 @@ private:
     bool skeletal_diagnostic_logged{};
     bool visual_snapshot_initialized{};
     bool movement_state_dirty{};
+    bool locomotion_state_dirty{};
+    bool locomotion_warning_logged{};
     bool hair_verification_pending{};
     bool body_verification_pending{};
     bool clock_offset_initialized{};
@@ -107,6 +112,8 @@ private:
       -> void;
   auto apply_remote_movement_state(std::uint64_t player_id,
                                    RemotePlayer &remote) -> void;
+  auto apply_remote_locomotion_state(std::uint64_t player_id,
+                                     RemotePlayer &remote) -> void;
   auto apply_remote_jump_events(std::uint64_t player_id, RemotePlayer &remote)
       -> void;
   auto configure_remote_network_authority(std::uint64_t player_id,
@@ -115,6 +122,8 @@ private:
       -> void;
   auto update_local_jump_diagnostics(RC::Unreal::AActor *pawn) -> void;
   auto disable_remote_ai(RC::Unreal::AActor *actor) -> void;
+  auto destroy_remote_actor(std::uint64_t player_id, RemotePlayer &remote,
+                            bool reset_interpolation) -> void;
   auto destroy_remote(std::uint64_t player_id) -> void;
   auto destroy_all_remotes() -> void;
 
@@ -126,6 +135,11 @@ private:
   std::string local_zone_;
   std::optional<protocol::AppearanceState> local_appearance_;
   std::optional<protocol::MovementState> local_movement_state_;
+  std::optional<protocol::PlayerLocomotionState> local_locomotion_state_;
+  protocol::PlayerContext detected_context_{
+      protocol::PlayerContext::unavailable};
+  protocol::PlayerContext local_context_{protocol::PlayerContext::unavailable};
+  std::optional<protocol::PlayerContext> last_sent_context_;
   RC::Unreal::AActor *local_visual_pawn_{};
   RC::Unreal::UObject *local_body_component_{};
   RC::Unreal::UObject *local_hair_component_{};

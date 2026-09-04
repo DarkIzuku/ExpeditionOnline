@@ -1,89 +1,104 @@
 # ExpeditionOnline
 
-Exploration-only online co-op prototype for *Clair Obscur: Expedition 33*. The current `0.5.0-rc1` instrumentation release candidate adds a visual-only jump-start event, an experimental network-authority mode for remote jitter, and crash-safe diagnostics for the vanilla customization route. Direct remote mesh writes are disabled by default after the rc2 runtime crash. Combat and shared progression are intentionally out of scope.
+`0.6.0-rc1` is the Exploration vNext candidate for *Clair Obscur:
+Expedition 33*. It combines ExpeditionOnline's timestamped TCP relay,
+interpolation, explicit JumpEvent and remote network authority with the
+independent world-character, world-map and vanilla customization routes found
+through directed analysis of OnlineExpedition 0.6.0.
 
-Normal users should start with [client quick start](docs/QUICK_START_CLIENT.md) or [host quick start](docs/QUICK_START_HOST.md). Technical scope, verified companions and remaining limitations are in [Exploration RC](docs/EXPLORATION_RC.md).
+Combat, story, quests, inventory and save synchronization remain deliberately
+out of scope. Each player's progression stays local.
 
-MVP experimental de cooperación online en exploración para **Clair Obscur: Expedition 33**, construido como mod C++ nativo de UE4SS y relay C++ independiente.
+## Exploration vNext
 
-La historia, las quests, el inventario y los archivos de save permanecen totalmente locales. No hay combate cooperativo ni PvP.
+- Binary TCP `EXON` protocol 5. Protocol 4 is intentionally rejected.
+- Server-authoritative player IDs, exact-zone isolation, heartbeat, reconnect
+  and late-join replay.
+- Timestamped `TransformSnapshot` interpolation remains the only positional
+  authority. `remote_network_authority=true` disables only remote
+  CharacterMovement tick; Actor, mesh and AnimBP keep ticking.
+- Normal remotes use an independent
+  `BP_jRPG_Character_World_C`; world-map remotes use
+  `BP_WorldMapCharacter_C`. AI companion actors are diagnostic fallback only.
+- Appearance transports vanilla `character_id`, `customization_skin` and
+  `customization_face`, then uses the validated
+  `LoadCharacterBaseDataFromID` → `CharacterCustomizationItemData` →
+  `LoadCharacterCustomizationFromItemData` → `SetCharacterCustomization`
+  route. Struct size, types and parameter offsets come from reflection at
+  runtime; mismatches fail open.
+- Locomotion is discrete, on-change state: movement mode, locomotion state,
+  gait, stance, sprint, crouch, aim and aim pitch. Validated
+  `SetMovementState`, `SetDesiredGait` and `SetStance` calls feed vanilla
+  presentation without controlling position.
+- Explicit `JumpEvent` is preserved. AIR without JumpEvent represents a
+  natural fall. No `AddMovementInput`, `Jump`, launch impulse or root-motion
+  position authority is used.
+- Exploration↔world-map transitions replace the visual actor and clear
+  incompatible interpolation. Same-context discontinuities above
+  `teleport_threshold_units` snap once with temporary zero Velocity.
+- Remote collision is disabled. Generated companion managers are disabled and
+  `UnspawnAICompanions` is requested when available.
 
-## Estado
+## Safety defaults
 
-- Protocolo binario TCP `EXON` v4, versionado y con límites de tamaño.
-- `ExpeditionOnlineServer.exe`: relay efímero solo entre jugadores de la misma zona.
-- `ExpeditionOnlineProbe.exe`: cliente de consola con posición base, yaw y movimiento circular configurables.
-- `main.dll`: cliente UE4SS nativo; se compila contra una revisión oficial fijada.
-- Unit tests e integración automática con servidor + Probe A + Probe B.
-- `PlayerJoined`, `PlayerLeft`, `ZoneState`, `AppearanceState` (Character/Outfit/Hair), `TransformSnapshot`, `MovementState` y `JumpEvent`.
-- `JumpEvent` se genera solo desde `OnJumped` real y se entrega directamente al `ALSCharacterAnimInstance.OnJumped` remoto; no aplica física. La transición visual sigue pendiente de validación runtime.
-- TCP-only en este MVP; `TransformSnapshot` queda separado para una futura ruta UDP.
+```ini
+remote_actor_mode=world_character
+fallback_ai_companion=true
+remote_network_authority=true
+remote_use_movement_input=false
+vanilla_customization=true
+world_map_remote=true
+unsafe_direct_appearance=false
+unsafe_direct_hair=false
+sync_locomotion_state=true
+sync_gait=true
+sync_crouch=true
+sync_aim=true
+teleport_threshold_units=5000
+```
 
-## Funcionamiento
+Direct writes to `CharacterMesh0` and `Haircut_SkeletalMesh` are not part of
+the normal route. The ProcessEvent hook rejects untracked objects before name
+allocation and only records the explicit skin/jump events needed by the mod.
 
-El servidor asigna un ID tras `Hello`, conserva solo estado de sesión y reenvía mensajes únicamente cuando el string de zona coincide. Nunca lee ni escribe progreso del juego.
+## Components
 
-En exploración, el cliente usa la arquitectura validada:
+- `ExpeditionOnlineServer.exe`: ephemeral same-zone relay.
+- `ExpeditionOnlineProbe.exe`: normal/world-map, appearance, teleport,
+  movement, jump and `--full-exploration-demo` simulator.
+- `ExpeditionOnlineSelfTest.exe`: protocol rejection, relay, context,
+  locomotion, natural-fall, late-join and reconnect checks.
+- `ExpeditionOnlineDoctor.exe`: installation and compatibility diagnostic.
+- `main.dll`: native UE4SS client built against the pinned official revision
+  in [UE4SS_BUILD_REVISION.txt](UE4SS_BUILD_REVISION.txt).
 
-- Controller: `BP_jRPG_Controller_World_C`.
-- Pawn local: `BP_jRPG_Character_World_C`.
-- Visual remoto: un actor nuevo `BP_Pawn_AICompanion_*_C`.
-- Apariencia: primero se usa el `SkeletalMeshComponent` exacto `Body`. Tras un cambio de skin, si desaparece, se valida `Pawn.Mesh` como el componente dinámico del outfit y después se hace un fallback con `K2_GetComponentsByClass` limitado al Pawn. Solo se aceptan meshes reconocidos bajo `/Game/Characters/Heros/<Character>/Customization/Skin/`; `SKM_Quinn`, `CharacterMesh0`, Face, Hair y Placeholder se rechazan. No se realizan scans globales de UObjects. El pelo se lee de `Haircut_SkeletalMesh`.
-- Character se infiere desde la ruta del body mesh. Solo Maelle, Sciel y Verso tienen clases companion verificadas; cualquier otro usa el fallback configurado y deja un warning claro.
-- El log `LOCAL_TRANSFORM` aparece aproximadamente cada dos segundos para copiar una posición de prueba sin inundar el archivo.
-- La locomoción remota calcula `Velocity = (posición actual - anterior) / deltaTime` usando snapshots reales y la escribe en `CharacterMovement.Velocity`. La presentación interpola un buffer ordenado de 24 snapshots con retardo configurable y rotación por el arco más corto. `MovementState` replica solo MovementMode/CustomMovementMode cuando cambian; `JumpEvent` aporta una única señal de inicio visual sin nombres, montages, frames ni fuerza física.
+## Build and test
 
-Cada remoto es una instancia independiente: se detiene su movimiento/BrainComponent, se desactivan el tick del AIController y la colisión, se aplican transforms de red y se destruye únicamente ese actor al salir de zona o desconectarse. Con `remote_network_authority=true` también se desactiva solo el tick de CharacterMovement, mientras Actor, SkeletalMesh y AnimBP permanecen activos y el mod continúa escribiendo Velocity/MovementMode. No se reutiliza ni altera un companion real.
-
-Cuando `PlayerController.Pawn` es `null`, el cliente considera que la exploración no está disponible y elimina sus remotos. Esto evita interferir con combate.
-
-La captura de apariencia usa backoff de 500 ms, 1 s y 2 s durante carga y conserva la última apariencia válida. Tanto local como remoto pueden seguir `Mesh`, `BP_CharacterSkinComponent`, `ChildActor_Skin` y actores attached/child alcanzables desde el Pawn; nunca recorren el conjunto global de UObjects.
-
-## Build y CI
-
-La revisión exacta está en [UE4SS_BUILD_REVISION.txt](UE4SS_BUILD_REVISION.txt). El workflow [build-windows.yml](.github/workflows/build-windows.yml) produce el artifact `ExpeditionOnline-Windows-x64` con un ZIP listo para probar.
-
-UE4SS depende del submódulo restringido `Re-UE4SS/UEPseudo`. Antes de compilar en GitHub es necesario configurar el secreto de lectura `UEPSEUDO_PAT`, igual que en el workflow oficial de UE4SS. Los pasos exactos están en [docs/BUILDING.md](docs/BUILDING.md).
-
-Build local de servidor, probe y tests:
+Standalone server, Probe, tools and tests:
 
 ```powershell
 .\scripts\build-server.ps1 -Configuration Release
 .\scripts\test-relay.ps1 -Configuration Release
+.\scripts\test-self.ps1 -Configuration Release
+.\scripts\test-probe-demos.ps1 -Configuration Release
 ```
 
-Build del cliente con un checkout oficial completo de UE4SS:
+The native client requires a complete checkout of the pinned official UE4SS
+source, including its restricted `Re-UE4SS/UEPseudo` submodule:
 
 ```powershell
 .\scripts\build-client.ps1 -UE4SSRoot C:\src\RE-UE4SS
 ```
 
-## Configuración
+See [building instructions](docs/BUILDING.md), the [protocol](docs/PROTOCOL.md),
+the [quick runtime test](docs/QUICK_TEST.md), and the directed
+[OnlineExpedition reverse-engineering report](documents/onlineexpedition-re.md).
 
-El artifact usa por defecto:
+GitHub Actions builds and verifies real Windows x64 PE outputs, the UE4SS
+exports, Doctor integration, package contents and three downloadable ZIPs:
+combined, Host and Client.
 
-```ini
-ServerHost=127.0.0.1
-ServerPort=7777
-interpolation_delay_ms=100
-remote_network_authority=true
-unsafe_direct_appearance=false
-unsafe_direct_hair=false
-```
+## Network boundary
 
-Para dos equipos, cambia `ServerHost` por la IP LAN del PC que ejecuta el servidor. No hardcodees ni publiques una IP pública.
-
-## Primera prueba
-
-Sigue [docs/QUICK_TEST.md](docs/QUICK_TEST.md). La especificación completa está en [docs/PROTOCOL.md](docs/PROTOCOL.md).
-
-## Límites deliberados
-
-- Sin batalla, enemigos, armas, acciones, animaciones, daño o PvP.
-- Sin story flags, quests, inventario, equipo funcional o saves compartidos.
-- Sin autenticación ni cifrado: usar solo en LAN/VPN de confianza.
-- Sin extrapolación prolongada: tras 750 ms sin snapshots la Velocity pasa a cero y se conserva la última posición.
-- La locomoción depende de que el AnimBP existente del companion consuma `GetVelocity`; los logs `REMOTE_MOTION_SETUP` y `REMOTE_MOTION` exponen los valores observados para la prueba runtime.
-- Outfit/Hair remotos independientes aún no están resueltos: rc2 localizó `CharacterMesh0`, cargó los assets y los aplicó, pero el juego crasheó inmediatamente. Esta RC carga y diagnostica los assets sin escribirlos por defecto mientras registra la ruta vanilla `BP_CharacterSkinComponent`/`CSAP_SwapAssign`.
-
-Para una fase futura quedan documentados los actores de batalla `BP_Maelle_Battle_C`, `BP_Verso_Battle2_C`, `BP_Sciel_Battle_C` y el patrón de armas `BP_WeaponSkin_<Character>_<Weapon>_C`.
+The relay does not authenticate or encrypt traffic. Use it only on a trusted
+LAN or VPN; do not expose port 7777 directly to the public Internet.
