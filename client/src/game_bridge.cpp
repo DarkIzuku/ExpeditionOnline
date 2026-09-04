@@ -2295,7 +2295,8 @@ auto GameBridge::update_local_player() -> void {
     if (aiming) {
       if (const auto *aim_rotation =
               rotator_property(free_aim, "CachedAimingRotation"))
-        aim_pitch = std::clamp(aim_rotation->GetPitch(), -180.0F, 180.0F);
+        aim_pitch = std::clamp(static_cast<float>(aim_rotation->GetPitch()),
+                               -180.0F, 180.0F);
     }
     const auto fallback_locomotion =
         has_local_is_falling && local_is_falling
