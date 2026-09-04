@@ -286,8 +286,10 @@ auto call_byte_input_validated(UObject *object,
     if (!property->HasAnyPropertyFlags(RC::Unreal::CPF_Parm) ||
         property->HasAnyPropertyFlags(RC::Unreal::CPF_ReturnParm))
       continue;
+    const auto property_type =
+        folded(narrow(property->GetClass().GetFName().ToString()));
     const auto enum_like = property->IsA<RC::Unreal::FByteProperty>() ||
-                           property->IsA<RC::Unreal::FEnumProperty>();
+                           property_type == "enumproperty";
     if (input || !enum_like || property->GetSize() != 1 ||
         !parameter_bounds_are_valid(function, property))
       return false;
@@ -344,7 +346,7 @@ auto read_item_customization_ids(UObject *character_data, std::string &skin,
     return false;
   auto *struct_property = static_cast<RC::Unreal::FStructProperty *>(property);
   auto *data = property->ContainerPtrToValuePtr<void>(character_data);
-  auto *type = struct_property->GetStruct();
+  auto *type = struct_property->GetStruct().Get();
   if (!data || !type || type->GetStructureSize() <= 0 ||
       type->GetStructureSize() > 4096)
     return false;
@@ -395,8 +397,9 @@ auto apply_vanilla_customization(UObject *actor,
     reason = "CharacterCustomizationItemData_missing";
     return false;
   }
-  auto *item_type =
-      static_cast<RC::Unreal::FStructProperty *>(item_property)->GetStruct();
+  auto *item_type = static_cast<RC::Unreal::FStructProperty *>(item_property)
+                        ->GetStruct()
+                        .Get();
   auto *item_data = item_property->ContainerPtrToValuePtr<void>(character_data);
   if (!item_type || !item_data || item_type->GetStructureSize() <= 0 ||
       item_type->GetStructureSize() > 4096) {
@@ -446,8 +449,9 @@ auto apply_vanilla_customization(UObject *actor,
     reason = "CharacterCustomization_missing";
     return false;
   }
-  auto *source_type =
-      static_cast<RC::Unreal::FStructProperty *>(source_property)->GetStruct();
+  auto *source_type = static_cast<RC::Unreal::FStructProperty *>(source_property)
+                          ->GetStruct()
+                          .Get();
   auto *source = source_property->ContainerPtrToValuePtr<void>(character_data);
   auto *function =
       actor->GetFunctionByNameInChain(L"SetCharacterCustomization");
@@ -468,8 +472,9 @@ auto apply_vanilla_customization(UObject *actor,
       return false;
     }
     if (param->IsA<RC::Unreal::FStructProperty>()) {
-      auto *target_type =
-          static_cast<RC::Unreal::FStructProperty *>(param)->GetStruct();
+      auto *target_type = static_cast<RC::Unreal::FStructProperty *>(param)
+                              ->GetStruct()
+                              .Get();
       if (customization_input || target_type != source_type ||
           param->GetSize() != source_property->GetSize()) {
         reason = "SetCharacterCustomization_struct_type";
