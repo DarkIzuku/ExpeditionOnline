@@ -13,6 +13,29 @@ if(bounded_scan_position EQUAL -1)
     message(FATAL_ERROR "GameBridge must enumerate components through the owning actor")
 endif()
 
+string(FIND "${game_bridge_source}"
+       "const auto skin = local_skin_objects_.find(object);"
+       skin_object_filter_position)
+string(FIND "${game_bridge_source}"
+       "const auto tracked = local_jump_objects_.find(object);"
+       jump_object_filter_position)
+string(FIND "${game_bridge_source}"
+       "tracked == local_jump_objects_.end())"
+       combined_object_filter_position)
+string(FIND "${game_bridge_source}"
+       "const auto function_name = object_leaf_name(function_object);"
+       process_event_name_position)
+if(skin_object_filter_position EQUAL -1 OR
+   jump_object_filter_position EQUAL -1 OR
+   combined_object_filter_position EQUAL -1 OR
+   process_event_name_position EQUAL -1 OR
+   skin_object_filter_position GREATER process_event_name_position OR
+   jump_object_filter_position GREATER process_event_name_position OR
+   combined_object_filter_position GREATER process_event_name_position)
+    message(FATAL_ERROR
+            "ProcessEvent must reject untracked objects before allocating function names")
+endif()
+
 foreach(required_marker IN ITEMS
         "UAssetRegistryHelpers::GetAsset"
         "REMOTE_ASSET_LOAD_FAILED"

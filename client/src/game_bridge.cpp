@@ -1312,11 +1312,15 @@ auto GameBridge::observe_process_event(UObject *object, UFunction *function)
   if (shutdown_ || !object_is_valid(object) ||
       !object_is_valid(function_object))
     return;
+  const auto skin = local_skin_objects_.find(object);
+  const auto tracked = local_jump_objects_.find(object);
+  if (skin == local_skin_objects_.end() &&
+      tracked == local_jump_objects_.end())
+    return;
   const auto function_name = object_leaf_name(function_object);
   const auto now = std::chrono::steady_clock::now();
 
-  if (const auto skin = local_skin_objects_.find(object);
-      skin != local_skin_objects_.end() &&
+  if (skin != local_skin_objects_.end() &&
       is_relevant_skin_function(function_name)) {
     const auto signature =
         "skin|" + object_name(object) + "|" + object_name(function_object);
@@ -1332,7 +1336,6 @@ auto GameBridge::observe_process_event(UObject *object, UFunction *function)
     }
   }
 
-  const auto tracked = local_jump_objects_.find(object);
   if (tracked == local_jump_objects_.end() ||
       !is_relevant_jump_function(function_name))
     return;
