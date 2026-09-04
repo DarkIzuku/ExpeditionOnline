@@ -3,7 +3,7 @@ name: Build Windows x64
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, exploration-vnext]
   pull_request:
 
 permissions:
