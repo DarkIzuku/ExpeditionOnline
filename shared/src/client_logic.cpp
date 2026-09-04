@@ -98,6 +98,27 @@ auto snapshot_stream_is_stale(std::uint64_t now_ms,
          now_ms - last_received_ms > stale_after_ms;
 }
 
+auto snapshot_exceeds_teleport_threshold(
+    const protocol::TransformSnapshot &from,
+    const protocol::TransformSnapshot &to, float threshold_units) -> bool {
+  if (threshold_units <= 0.0F)
+    return false;
+  const auto dx = to.x - from.x;
+  const auto dy = to.y - from.y;
+  const auto dz = to.z - from.z;
+  return dx * dx + dy * dy + dz * dz > threshold_units * threshold_units;
+}
+
+auto context_requires_actor_reset(protocol::PlayerContext previous,
+                                  protocol::PlayerContext next) -> bool {
+  return previous != next;
+}
+
+auto context_supports_remote_actor(protocol::PlayerContext context) -> bool {
+  return context == protocol::PlayerContext::exploration ||
+         context == protocol::PlayerContext::world_map;
+}
+
 auto infer_character_from_body_mesh(const std::string &mesh_path)
     -> std::string {
   std::string folded = mesh_path;
@@ -117,9 +138,8 @@ auto infer_character_from_body_mesh(const std::string &mesh_path)
 }
 
 auto appearance_is_ready(const protocol::AppearanceState &appearance) -> bool {
-  return !appearance.outfit_mesh.empty() &&
-         appearance.character_class != "Unknown" &&
-         !appearance.character_class.empty();
+  return !appearance.character_id.empty() &&
+         appearance.character_id != "Unknown";
 }
 
 auto select_effective_appearance(

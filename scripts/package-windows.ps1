@@ -31,11 +31,11 @@ foreach ($required in @($serverExe, $probeExe, $selfTestExe, $doctorExe, $mainDl
 }
 
 $version = @(
-    "ExpeditionOnline version: 0.5.0-rc1"
+    "ExpeditionOnline version: 0.6.0-rc1"
     "ExpeditionOnline commit: $ExpeditionCommit"
     "UE4SS build revision: $UE4SSRevision"
     "Build date (UTC): $BuildDate"
-    "Protocol version: 4"
+    "Protocol version: 5"
     "Configuration: Release x64"
     "UE4SS configuration: Game__Shipping__Win64 x64"
 )

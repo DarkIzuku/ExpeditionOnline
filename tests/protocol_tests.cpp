@@ -24,17 +24,24 @@ auto test_payloads() -> void {
   check(decoded_hello.player_name == hello.player_name, "Hello player_name");
   check(decoded_hello.client_build == hello.client_build, "Hello client_build");
 
-  const proto::AppearanceState appearance{42, "BP_Maelle_C", "/Game/Body",
-                                          "/Game/Hair"};
+  const proto::AppearanceState appearance{42, "Maelle", "Maelle_ActeIII",
+                                          "Maelle_Face_02"};
   const auto decoded_appearance =
       proto::decode_appearance_state(proto::encode(appearance));
   check(decoded_appearance.player_id == 42, "Appearance player_id");
-  check(decoded_appearance.character_class == appearance.character_class,
+  check(decoded_appearance.character_id == appearance.character_id,
         "Appearance character");
-  check(decoded_appearance.outfit_mesh == appearance.outfit_mesh,
-        "Appearance outfit");
-  check(decoded_appearance.hair_mesh == appearance.hair_mesh,
-        "Appearance hair");
+  check(decoded_appearance.customization_skin == appearance.customization_skin,
+        "Appearance customization skin");
+  check(decoded_appearance.customization_face == appearance.customization_face,
+        "Appearance customization face");
+
+  const proto::PlayerContextState context{42, proto::PlayerContext::world_map};
+  const auto decoded_context =
+      proto::decode_player_context_state(proto::encode(context));
+  check(decoded_context.player_id == 42, "PlayerContextState player_id");
+  check(decoded_context.context == proto::PlayerContext::world_map,
+        "PlayerContextState context");
 
   const proto::PlayerJoined joined{77, "Verso"};
   const auto decoded_joined =
@@ -63,6 +70,20 @@ auto test_payloads() -> void {
   check(decoded_movement.movement_mode == 3, "MovementState movement_mode");
   check(decoded_movement.custom_movement_mode == 7,
         "MovementState custom_movement_mode");
+
+  const proto::PlayerLocomotionState locomotion{91,   3,    4,    2,     1,
+                                                true, true, true, -27.5F};
+  const auto decoded_locomotion =
+      proto::decode_player_locomotion_state(proto::encode(locomotion));
+  check(decoded_locomotion.player_id == 91, "PlayerLocomotionState player_id");
+  check(decoded_locomotion.movement_mode == 3 &&
+            decoded_locomotion.locomotion_state == 4 &&
+            decoded_locomotion.gait == 2 && decoded_locomotion.stance == 1,
+        "PlayerLocomotionState compact enums");
+  check(decoded_locomotion.sprinting && decoded_locomotion.crouching &&
+            decoded_locomotion.aiming &&
+            std::fabs(decoded_locomotion.aim_pitch + 27.5F) < 0.0001F,
+        "PlayerLocomotionState flags and aim pitch");
 
   const proto::JumpEvent jump{1234, 17};
   const auto decoded_jump = proto::decode_jump_event(proto::encode(jump));
@@ -107,7 +128,16 @@ auto test_rejections() -> void {
         "Hello is not empty payload");
   check(proto::is_known_message_type(proto::MessageType::jump_event),
         "known JumpEvent type");
-  check(proto::kProtocolVersion == 4, "protocol v4 capability boundary");
+  check(proto::is_known_message_type(proto::MessageType::player_context_state),
+        "known PlayerContextState type");
+  check(
+      proto::is_known_message_type(proto::MessageType::player_locomotion_state),
+      "known PlayerLocomotionState type");
+  check(proto::is_valid_player_context(proto::PlayerContext::combat),
+        "valid combat context");
+  check(!proto::is_valid_player_context(static_cast<proto::PlayerContext>(255)),
+        "invalid player context");
+  check(proto::kProtocolVersion == 5, "protocol v5 capability boundary");
 
   bool rejected{};
   try {
@@ -164,6 +194,24 @@ auto test_snapshot_interpolation() -> void {
         "snapshot not stale at threshold");
   check(logic::snapshot_stream_is_stale(1751, 1000),
         "snapshot stale after threshold");
+  check(logic::snapshot_exceeds_teleport_threshold(
+            snapshot(100, 0.0F), snapshot(200, 100.0F), 50.0F),
+        "large same-context transform is a teleport");
+  check(!logic::snapshot_exceeds_teleport_threshold(
+            snapshot(100, 0.0F), snapshot(200, 10.0F), 50.0F),
+        "normal transform stays interpolated");
+  check(logic::context_requires_actor_reset(proto::PlayerContext::exploration,
+                                            proto::PlayerContext::world_map),
+        "context transition resets remote actor");
+  check(!logic::context_requires_actor_reset(proto::PlayerContext::exploration,
+                                             proto::PlayerContext::exploration),
+        "stable context preserves remote actor");
+  check(
+      logic::context_supports_remote_actor(proto::PlayerContext::exploration) &&
+          logic::context_supports_remote_actor(
+              proto::PlayerContext::world_map) &&
+          !logic::context_supports_remote_actor(proto::PlayerContext::combat),
+      "only exploration contexts render remote actors");
 }
 
 auto test_appearance_selection() -> void {
@@ -247,13 +295,11 @@ auto test_appearance_selection() -> void {
   check(logic::score_appearance_candidate(placeholder) < 0,
         "Placeholder mesh rejected");
 
-  const proto::AppearanceState valid{1, "Lune", direct.mesh_full_name,
-                                     "/Game/Characters/Hair/LuneHair"};
-  const proto::AppearanceState pending{1, "Unknown", "",
-                                       "/Game/Characters/Hair/ScielHair"};
+  const proto::AppearanceState valid{1, "Lune", "Lune_Chic", "Lune_Face_01"};
+  const proto::AppearanceState pending{1, "Unknown", "", "Sciel_Face_01"};
   const auto retained = logic::select_effective_appearance(valid, pending);
-  check(retained && retained->character_class == "Lune" &&
-            retained->outfit_mesh == valid.outfit_mesh,
+  check(retained && retained->character_id == "Lune" &&
+            retained->customization_skin == valid.customization_skin,
         "pending Unknown does not replace last valid appearance");
   check(!logic::select_effective_appearance(std::nullopt, pending),
         "initial Unknown remains pending");

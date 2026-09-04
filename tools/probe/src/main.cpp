@@ -23,8 +23,9 @@ struct Options {
   std::string name{"Probe"};
   std::string zone{"ProbeZone"};
   std::string character{"ProbeCharacter"};
-  std::string outfit;
-  std::string hair;
+  std::string customization_skin;
+  std::string customization_face;
+  proto::PlayerContext context{proto::PlayerContext::exploration};
   int duration_seconds{10};
   float x{};
   float y{};
@@ -38,6 +39,9 @@ struct Options {
   bool jump_demo{};
   bool idle_demo{};
   bool appearance_test{};
+  bool teleport_demo{};
+  bool full_exploration_demo{};
+  bool crouch_demo{};
   bool show_help{};
 };
 
@@ -51,12 +55,11 @@ auto print_usage() -> void {
       << "  --port <port>       Server TCP port (default: 7777)\n"
       << "  --name <name>       Simulated player name (default: Probe)\n"
       << "  --zone <zone>       Exact LOCAL_ZONE value (default: ProbeZone)\n"
-      << "  --character <name>  Literal AppearanceState character (default: "
+      << "  --char <id>          Literal vanilla character ID (default: "
          "ProbeCharacter)\n"
-      << "  --outfit <UObject>  Literal full UObject name for the outfit mesh "
-         "(default: empty)\n"
-      << "  --hair <UObject>    Literal full UObject name for the hair mesh "
-         "(default: empty)\n"
+      << "  --customization-skin <id>  Vanilla customization skin ID\n"
+      << "  --customization-face <id>  Vanilla customization face ID\n"
+      << "  --context <value>   unavailable|exploration|world_map|combat\n"
       << "  --duration <sec>    Test duration in seconds (default: 10)\n"
       << "  --x <float>         Circle center X from LOCAL_TRANSFORM (default: "
          "0)\n"
@@ -73,8 +76,13 @@ auto print_usage() -> void {
       << "  --idle-demo          Hold one exact transform for 15 seconds "
          "unless "
          "--duration is set\n"
-      << "  --appearance-test    Hold the literal outfit/hair for 60 seconds "
+      << "  --appearance-test    Hold the literal customization IDs for 60 "
+         "seconds "
          "unless --duration is set\n"
+      << "  --teleport-demo      Emit one transform beyond the teleport "
+         "threshold\n"
+      << "  --full-exploration-demo  Idle/walk/run/sprint/stop/jump/stop\n"
+      << "  --crouch-demo        Add a standing/crouching/standing transition\n"
       << "  --help              Show this help\n";
 }
 
@@ -100,13 +108,25 @@ auto parse_options(int argc, char **argv) -> Options {
       options.name = next_value();
     else if (argument == "--zone")
       options.zone = next_value();
-    else if (argument == "--character")
+    else if (argument == "--char" || argument == "--character")
       options.character = next_value();
-    else if (argument == "--outfit")
-      options.outfit = next_value();
-    else if (argument == "--hair")
-      options.hair = next_value();
-    else if (argument == "--duration") {
+    else if (argument == "--customization-skin" || argument == "--outfit")
+      options.customization_skin = next_value();
+    else if (argument == "--customization-face" || argument == "--hair")
+      options.customization_face = next_value();
+    else if (argument == "--context") {
+      const auto value = next_value();
+      if (value == "unavailable" || value == "0")
+        options.context = proto::PlayerContext::unavailable;
+      else if (value == "exploration" || value == "1")
+        options.context = proto::PlayerContext::exploration;
+      else if (value == "world_map" || value == "world-map" || value == "2")
+        options.context = proto::PlayerContext::world_map;
+      else if (value == "combat" || value == "3")
+        options.context = proto::PlayerContext::combat;
+      else
+        throw std::runtime_error("invalid context: " + value);
+    } else if (argument == "--duration") {
       options.duration_seconds = std::stoi(next_value());
       options.duration_explicit = true;
     } else if (argument == "--x")
@@ -131,6 +151,12 @@ auto parse_options(int argc, char **argv) -> Options {
       options.idle_demo = true;
     else if (argument == "--appearance-test")
       options.appearance_test = true;
+    else if (argument == "--teleport-demo")
+      options.teleport_demo = true;
+    else if (argument == "--full-exploration-demo")
+      options.full_exploration_demo = true;
+    else if (argument == "--crouch-demo")
+      options.crouch_demo = true;
     else
       throw std::runtime_error("unknown or incomplete argument: " + argument);
   }
@@ -158,6 +184,8 @@ auto parse_options(int argc, char **argv) -> Options {
   }
   if (options.appearance_test && !options.duration_explicit)
     options.duration_seconds = 60;
+  if (options.full_exploration_demo && !options.duration_explicit)
+    options.duration_seconds = 30;
   return options;
 }
 
@@ -174,7 +202,30 @@ struct DemoTransform {
 auto demo_transform(const Options &options, float elapsed) -> DemoTransform {
   DemoTransform result{options.x, options.y, options.z, 0.0F,
                        0.0F,      "CIRCLE",  "GROUND"};
-  if (options.movement_demo) {
+  if (options.full_exploration_demo) {
+    float distance{};
+    if (elapsed < 3.0F) {
+      result.movement_phase = "IDLE";
+    } else if (elapsed < 8.0F) {
+      result.movement_phase = "WALK";
+      result.speed = 180.0F;
+      distance = (elapsed - 3.0F) * result.speed;
+    } else if (elapsed < 13.0F) {
+      result.movement_phase = "RUN";
+      result.speed = 450.0F;
+      distance = 900.0F + (elapsed - 8.0F) * result.speed;
+    } else if (elapsed < 18.0F) {
+      result.movement_phase = "SPRINT";
+      result.speed = 700.0F;
+      distance = 3150.0F + (elapsed - 13.0F) * result.speed;
+    } else {
+      result.movement_phase = "STOP";
+      distance = 6650.0F;
+    }
+    const auto yaw_radians = options.yaw * 3.14159265358979323846F / 180.0F;
+    result.x = options.x + std::cos(yaw_radians) * distance;
+    result.y = options.y + std::sin(yaw_radians) * distance;
+  } else if (options.movement_demo) {
     float distance{};
     if (elapsed < 5.0F)
       result.movement_phase = "IDLE";
@@ -201,8 +252,8 @@ auto demo_transform(const Options &options, float elapsed) -> DemoTransform {
   } else
     result.movement_phase = "IDLE";
 
-  if (options.jump_demo) {
-    constexpr float jump_start = 5.0F;
+  if (options.jump_demo || options.full_exploration_demo) {
+    const auto jump_start = options.full_exploration_demo ? 22.0F : 5.0F;
     constexpr float launch_velocity = 600.0F;
     constexpr float gravity = -980.0F;
     const auto jump_time = elapsed - jump_start;
@@ -255,8 +306,15 @@ auto show_frame(const proto::Frame &frame) -> void {
   case proto::MessageType::appearance_state: {
     const auto value = proto::decode_appearance_state(frame.payload);
     std::cout << " player=" << value.player_id
-              << " character=" << value.character_class
-              << " outfit=" << value.outfit_mesh << " hair=" << value.hair_mesh;
+              << " character_id=" << value.character_id
+              << " customization_skin=" << value.customization_skin
+              << " customization_face=" << value.customization_face;
+    break;
+  }
+  case proto::MessageType::player_context_state: {
+    const auto value = proto::decode_player_context_state(frame.payload);
+    std::cout << " player=" << value.player_id
+              << " context=" << proto::player_context_name(value.context);
     break;
   }
   case proto::MessageType::transform_snapshot: {
@@ -271,6 +329,20 @@ auto show_frame(const proto::Frame &frame) -> void {
               << " movement_mode=" << static_cast<int>(value.movement_mode)
               << " custom_movement_mode="
               << static_cast<int>(value.custom_movement_mode);
+    break;
+  }
+  case proto::MessageType::player_locomotion_state: {
+    const auto value = proto::decode_player_locomotion_state(frame.payload);
+    std::cout << " player=" << value.player_id
+              << " movement_mode=" << static_cast<int>(value.movement_mode)
+              << " locomotion_state="
+              << static_cast<int>(value.locomotion_state)
+              << " gait=" << static_cast<int>(value.gait)
+              << " stance=" << static_cast<int>(value.stance)
+              << " sprinting=" << (value.sprinting ? "true" : "false")
+              << " crouching=" << (value.crouching ? "true" : "false")
+              << " aiming=" << (value.aiming ? "true" : "false")
+              << " aim_pitch=" << value.aim_pitch;
     break;
   }
   case proto::MessageType::jump_event: {
@@ -320,19 +392,29 @@ auto main(int argc, char **argv) -> int {
     send_frame(socket,
                proto::make_frame(proto::MessageType::zone_state, sequence++,
                                  proto::ZoneState{0, options.zone}));
-    send_frame(socket,
-               proto::make_frame(
-                   proto::MessageType::appearance_state, sequence++,
-                   proto::AppearanceState{0, options.character, options.outfit,
-                                          options.hair}));
+    send_frame(socket, proto::make_frame(
+                           proto::MessageType::player_context_state, sequence++,
+                           proto::PlayerContextState{0, options.context}));
+    send_frame(socket, proto::make_frame(
+                           proto::MessageType::appearance_state, sequence++,
+                           proto::AppearanceState{0, options.character,
+                                                  options.customization_skin,
+                                                  options.customization_face}));
     send_frame(socket,
                proto::make_frame(proto::MessageType::movement_state, sequence++,
                                  proto::MovementState{0, 1, 0}));
+    send_frame(socket,
+               proto::make_frame(
+                   proto::MessageType::player_locomotion_state, sequence++,
+                   proto::PlayerLocomotionState{0, 1, 0, 0, 0, false, false,
+                                                false, 0.0F}));
     if (options.jump_demo)
       std::cout << "DEMO_MOVEMENT_STATE mode=1 custom=0\n";
     std::cout << "CONNECTED name=" << options.name << " zone=" << options.zone
               << " character=" << options.character
-              << " outfit=" << options.outfit << " hair=" << options.hair
+              << " customization_skin=" << options.customization_skin
+              << " customization_face=" << options.customization_face
+              << " context=" << proto::player_context_name(options.context)
               << " base=" << options.x << ',' << options.y << ',' << options.z
               << " yaw=" << options.yaw << " radius=" << options.radius
               << " angular_speed=" << options.angular_speed
@@ -341,7 +423,12 @@ auto main(int argc, char **argv) -> int {
               << " jump_demo=" << (options.jump_demo ? "true" : "false")
               << " idle_demo=" << (options.idle_demo ? "true" : "false")
               << " appearance_test="
-              << (options.appearance_test ? "true" : "false") << '\n';
+              << (options.appearance_test ? "true" : "false")
+              << " teleport_demo=" << (options.teleport_demo ? "true" : "false")
+              << " full_exploration_demo="
+              << (options.full_exploration_demo ? "true" : "false")
+              << " crouch_demo=" << (options.crouch_demo ? "true" : "false")
+              << '\n';
 
     proto::FrameDecoder decoder;
     std::array<std::uint8_t, 64U * 1024U> buffer{};
@@ -352,12 +439,20 @@ auto main(int argc, char **argv) -> int {
     std::uint8_t last_movement_mode{1};
     std::uint64_t jump_sequence{};
     bool jump_event_sent{};
+    bool teleport_sent{};
+    std::string last_locomotion_signature;
     while (std::chrono::steady_clock::now() - start <
            std::chrono::seconds(options.duration_seconds)) {
       const auto now = std::chrono::steady_clock::now();
       if (now >= next_snapshot) {
         const auto elapsed = std::chrono::duration<float>(now - start).count();
         const auto demo = demo_transform(options, elapsed);
+        auto output = demo;
+        if (options.teleport_demo && !teleport_sent && elapsed >= 3.0F) {
+          output.x += 10000.0F;
+          teleport_sent = true;
+          std::cout << "DEMO_TELEPORT delta=10000\n";
+        }
         if (demo.movement_phase != last_movement_phase ||
             demo.jump_phase != last_jump_phase) {
           std::cout << "DEMO_PHASE movement=" << demo.movement_phase
@@ -368,7 +463,8 @@ auto main(int argc, char **argv) -> int {
         }
         const auto movement_mode =
             logic::jump_demo_movement_mode(demo.jump_phase);
-        if (options.jump_demo && !jump_event_sent && movement_mode == 3) {
+        if ((options.jump_demo || options.full_exploration_demo) &&
+            !jump_event_sent && movement_mode == 3) {
           ++jump_sequence;
           send_frame(socket, proto::make_frame(
                                  proto::MessageType::jump_event, sequence++,
@@ -384,6 +480,47 @@ auto main(int argc, char **argv) -> int {
                     << static_cast<int>(movement_mode) << " custom=0\n";
           last_movement_mode = movement_mode;
         }
+        const auto gait = demo.movement_phase == "WALK"     ? std::uint8_t{1}
+                          : demo.movement_phase == "RUN"    ? std::uint8_t{2}
+                          : demo.movement_phase == "SPRINT" ? std::uint8_t{3}
+                                                            : std::uint8_t{0};
+        const auto airborne = movement_mode == 3;
+        const auto crouching =
+            options.crouch_demo && elapsed >= 18.0F && elapsed < 21.0F;
+        const proto::PlayerLocomotionState locomotion{
+            0,
+            movement_mode,
+            airborne ? std::uint8_t{2}
+                     : (demo.speed > 0.0F ? std::uint8_t{1} : std::uint8_t{0}),
+            gait,
+            crouching ? std::uint8_t{1} : std::uint8_t{0},
+            gait == 3,
+            crouching,
+            false,
+            0.0F};
+        const auto locomotion_signature =
+            std::to_string(locomotion.movement_mode) + '|' +
+            std::to_string(locomotion.locomotion_state) + '|' +
+            std::to_string(locomotion.gait) + '|' +
+            std::to_string(locomotion.stance) + '|' +
+            (locomotion.sprinting ? "1" : "0") + '|' +
+            (locomotion.crouching ? "1" : "0");
+        if (locomotion_signature != last_locomotion_signature) {
+          send_frame(socket, proto::make_frame(
+                                 proto::MessageType::player_locomotion_state,
+                                 sequence++, locomotion));
+          std::cout << "DEMO_LOCOMOTION movement_mode="
+                    << static_cast<int>(locomotion.movement_mode)
+                    << " locomotion_state="
+                    << static_cast<int>(locomotion.locomotion_state)
+                    << " gait=" << static_cast<int>(locomotion.gait)
+                    << " stance=" << static_cast<int>(locomotion.stance)
+                    << " sprinting="
+                    << (locomotion.sprinting ? "true" : "false")
+                    << " crouching="
+                    << (locomotion.crouching ? "true" : "false") << '\n';
+          last_locomotion_signature = locomotion_signature;
+        }
         const auto timestamp = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch())
@@ -392,8 +529,8 @@ auto main(int argc, char **argv) -> int {
             socket,
             proto::make_frame(
                 proto::MessageType::transform_snapshot, sequence++,
-                proto::TransformSnapshot{0, timestamp, demo.x, demo.y, demo.z,
-                                         0.0F, options.yaw, 0.0F}));
+                proto::TransformSnapshot{0, timestamp, output.x, output.y,
+                                         output.z, 0.0F, options.yaw, 0.0F}));
         next_snapshot =
             now + std::chrono::milliseconds(1000 / options.snapshot_hz);
       }

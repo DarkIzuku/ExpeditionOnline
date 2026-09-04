@@ -7,14 +7,14 @@
 #define EXPEDITION_BUILD_COMMIT "unknown"
 #endif
 
-namespace expedition_online::build_info
-{
-inline constexpr const char* kVersion = "0.4.0-rc2";
-inline constexpr const char* kCommit = EXPEDITION_BUILD_COMMIT;
+namespace expedition_online::build_info {
+inline constexpr const char *kVersion = "0.6.0-rc1";
+inline constexpr const char *kCommit = EXPEDITION_BUILD_COMMIT;
 
-inline auto identity(const char* component, std::uint16_t protocol_version) -> std::string
-{
-    return std::string("ExpeditionOnline ") + component + ' ' + kVersion + " Protocol " +
-           std::to_string(protocol_version) + " Build commit " + kCommit;
+inline auto identity(const char *component, std::uint16_t protocol_version)
+    -> std::string {
+  return std::string("ExpeditionOnline ") + component + ' ' + kVersion +
+         " Protocol " + std::to_string(protocol_version) + " Build commit " +
+         kCommit;
 }
 } // namespace expedition_online::build_info

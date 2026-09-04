@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ExpeditionOnline VERSION 0.5.0 LANGUAGES CXX)
+project(ExpeditionOnline VERSION 0.6.0 LANGUAGES CXX)
 
 option(EXPEDITION_BUILD_SERVER "Build ExpeditionOnlineServer" ON)
 option(EXPEDITION_BUILD_CLIENT "Build the UE4SS native client mod" OFF)

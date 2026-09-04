@@ -167,9 +167,16 @@ auto encode(const ZoneState &value) -> std::vector<std::uint8_t> {
 auto encode(const AppearanceState &value) -> std::vector<std::uint8_t> {
   Writer writer;
   writer.u64(value.player_id);
-  writer.string(value.character_class);
-  writer.string(value.outfit_mesh);
-  writer.string(value.hair_mesh);
+  writer.string(value.character_id);
+  writer.string(value.customization_skin);
+  writer.string(value.customization_face);
+  return std::move(writer).take();
+}
+
+auto encode(const PlayerContextState &value) -> std::vector<std::uint8_t> {
+  Writer writer;
+  writer.u64(value.player_id);
+  writer.u8(static_cast<std::uint8_t>(value.context));
   return std::move(writer).take();
 }
 
@@ -198,6 +205,25 @@ auto encode(const MovementState &value) -> std::vector<std::uint8_t> {
   writer.u64(value.player_id);
   writer.u8(value.movement_mode);
   writer.u8(value.custom_movement_mode);
+  return std::move(writer).take();
+}
+
+auto encode(const PlayerLocomotionState &value) -> std::vector<std::uint8_t> {
+  Writer writer;
+  writer.u64(value.player_id);
+  writer.u8(value.movement_mode);
+  writer.u8(value.locomotion_state);
+  writer.u8(value.gait);
+  writer.u8(value.stance);
+  std::uint8_t flags{};
+  if (value.sprinting)
+    flags |= 0x01U;
+  if (value.crouching)
+    flags |= 0x02U;
+  if (value.aiming)
+    flags |= 0x04U;
+  writer.u8(flags);
+  writer.f32(value.aim_pitch);
   return std::move(writer).take();
 }
 
@@ -251,6 +277,15 @@ auto decode_appearance_state(std::span<const std::uint8_t> bytes)
   return value;
 }
 
+auto decode_player_context_state(std::span<const std::uint8_t> bytes)
+    -> PlayerContextState {
+  Reader reader(bytes);
+  PlayerContextState value{reader.u64(),
+                           static_cast<PlayerContext>(reader.u8())};
+  reader.finish();
+  return value;
+}
+
 auto decode_player_joined(std::span<const std::uint8_t> bytes) -> PlayerJoined {
   Reader reader(bytes);
   PlayerJoined value{reader.u64(), reader.string()};
@@ -278,6 +313,24 @@ auto decode_movement_state(std::span<const std::uint8_t> bytes)
     -> MovementState {
   Reader reader(bytes);
   MovementState value{reader.u64(), reader.u8(), reader.u8()};
+  reader.finish();
+  return value;
+}
+
+auto decode_player_locomotion_state(std::span<const std::uint8_t> bytes)
+    -> PlayerLocomotionState {
+  Reader reader(bytes);
+  PlayerLocomotionState value;
+  value.player_id = reader.u64();
+  value.movement_mode = reader.u8();
+  value.locomotion_state = reader.u8();
+  value.gait = reader.u8();
+  value.stance = reader.u8();
+  const auto flags = reader.u8();
+  value.sprinting = (flags & 0x01U) != 0;
+  value.crouching = (flags & 0x02U) != 0;
+  value.aiming = (flags & 0x04U) != 0;
+  value.aim_pitch = reader.f32();
   reader.finish();
   return value;
 }
@@ -392,6 +445,10 @@ auto message_type_name(MessageType type) -> const char * {
     return "MovementState";
   case MessageType::jump_event:
     return "JumpEvent";
+  case MessageType::player_context_state:
+    return "PlayerContextState";
+  case MessageType::player_locomotion_state:
+    return "PlayerLocomotionState";
   default:
     return "Unknown";
   }
@@ -414,6 +471,10 @@ auto is_known_message_type(MessageType type) noexcept -> bool {
     return true;
   case MessageType::jump_event:
     return true;
+  case MessageType::player_context_state:
+    return true;
+  case MessageType::player_locomotion_state:
+    return true;
   default:
     return false;
   }
@@ -421,5 +482,26 @@ auto is_known_message_type(MessageType type) noexcept -> bool {
 
 auto is_empty_payload_message(MessageType type) noexcept -> bool {
   return type == MessageType::ping || type == MessageType::pong;
+}
+
+auto is_valid_player_context(PlayerContext context) noexcept -> bool {
+  return context == PlayerContext::unavailable ||
+         context == PlayerContext::exploration ||
+         context == PlayerContext::world_map ||
+         context == PlayerContext::combat;
+}
+
+auto player_context_name(PlayerContext context) noexcept -> const char * {
+  switch (context) {
+  case PlayerContext::unavailable:
+    return "unavailable";
+  case PlayerContext::exploration:
+    return "exploration";
+  case PlayerContext::world_map:
+    return "world_map";
+  case PlayerContext::combat:
+    return "combat";
+  }
+  return "invalid";
 }
 } // namespace expedition_online::protocol

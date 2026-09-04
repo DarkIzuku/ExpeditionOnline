@@ -62,6 +62,10 @@ auto player_id_of(const proto::Frame &frame) -> std::optional<std::uint64_t> {
     return proto::decode_zone_state(frame.payload).player_id;
   case proto::MessageType::appearance_state:
     return proto::decode_appearance_state(frame.payload).player_id;
+  case proto::MessageType::player_context_state:
+    return proto::decode_player_context_state(frame.payload).player_id;
+  case proto::MessageType::player_locomotion_state:
+    return proto::decode_player_locomotion_state(frame.payload).player_id;
   case proto::MessageType::transform_snapshot:
     return proto::decode_transform_snapshot(frame.payload).player_id;
   case proto::MessageType::movement_state:
@@ -269,6 +273,15 @@ auto verify_malformed_isolation(const Options &options, TestClient &observer)
   (void)invalid_movement.wait_for(proto::MessageType::error, std::nullopt,
                                   std::chrono::seconds(2));
 
+  TestClient invalid_context(options.host, options.port,
+                             "SelfTest-InvalidContext");
+  invalid_context.connect_and_hello();
+  invalid_context.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{999, static_cast<proto::PlayerContext>(255)});
+  (void)invalid_context.wait_for(proto::MessageType::error, std::nullopt,
+                                 std::chrono::seconds(2));
+
   observer.send_empty(proto::MessageType::ping);
   (void)observer.wait_for(proto::MessageType::pong, std::nullopt,
                           std::chrono::seconds(2));
@@ -281,6 +294,12 @@ auto run_self_test(const Options &options) -> void {
                      proto::ZoneState{999, "ZoneA"});
   alice.send_message(proto::MessageType::appearance_state,
                      proto::AppearanceState{999, "Maelle", "OutfitA", "HairA"});
+  alice.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{999, proto::PlayerContext::exploration});
+  alice.send_message(
+      proto::MessageType::player_locomotion_state,
+      proto::PlayerLocomotionState{999, 3, 4, 3, 0, true, false, false, 0.0F});
   alice.send_message(proto::MessageType::transform_snapshot,
                      proto::TransformSnapshot{999, 1000, 100.0F, 200.0F, 300.0F,
                                               0.0F, 45.0F, 0.0F});
@@ -296,6 +315,12 @@ auto run_self_test(const Options &options) -> void {
                                             0.0F, 90.0F, 0.0F});
   bob.send_message(proto::MessageType::movement_state,
                    proto::MovementState{888, 1, 0});
+  bob.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{888, proto::PlayerContext::world_map});
+  bob.send_message(
+      proto::MessageType::player_locomotion_state,
+      proto::PlayerLocomotionState{888, 1, 1, 1, 1, false, true, true, 15.0F});
   bob.send_message(proto::MessageType::zone_state,
                    proto::ZoneState{888, "ZoneA"});
 
@@ -305,6 +330,21 @@ auto run_self_test(const Options &options) -> void {
                      std::chrono::seconds(3));
   (void)bob.wait_for(proto::MessageType::appearance_state, alice.id(),
                      std::chrono::seconds(3));
+  const auto late_context =
+      bob.wait_for(proto::MessageType::player_context_state, alice.id(),
+                   std::chrono::seconds(3));
+  if (proto::decode_player_context_state(late_context.payload).context !=
+      proto::PlayerContext::exploration)
+    throw std::runtime_error("late join PlayerContextState was not retained");
+  const auto late_locomotion =
+      bob.wait_for(proto::MessageType::player_locomotion_state, alice.id(),
+                   std::chrono::seconds(3));
+  const auto decoded_locomotion =
+      proto::decode_player_locomotion_state(late_locomotion.payload);
+  if (decoded_locomotion.gait != 3 || !decoded_locomotion.sprinting ||
+      decoded_locomotion.stance != 0)
+    throw std::runtime_error(
+        "late join PlayerLocomotionState was not retained");
   (void)bob.wait_for(proto::MessageType::transform_snapshot, alice.id(),
                      std::chrono::seconds(3));
   const auto late_movement = bob.wait_for(proto::MessageType::movement_state,
@@ -316,6 +356,10 @@ auto run_self_test(const Options &options) -> void {
   (void)alice.wait_for(proto::MessageType::zone_state, bob.id(),
                        std::chrono::seconds(3));
   (void)alice.wait_for(proto::MessageType::appearance_state, bob.id(),
+                       std::chrono::seconds(3));
+  (void)alice.wait_for(proto::MessageType::player_context_state, bob.id(),
+                       std::chrono::seconds(3));
+  (void)alice.wait_for(proto::MessageType::player_locomotion_state, bob.id(),
                        std::chrono::seconds(3));
   (void)alice.wait_for(proto::MessageType::transform_snapshot, bob.id(),
                        std::chrono::seconds(3));
@@ -339,6 +383,65 @@ auto run_self_test(const Options &options) -> void {
                                         alice.id(), std::chrono::seconds(3));
   if (proto::decode_jump_event(second_jump.payload).sequence != 2)
     throw std::runtime_error("JumpEvent sequence did not advance");
+
+  alice.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{0, proto::PlayerContext::world_map});
+  const auto transitioned =
+      bob.wait_for(proto::MessageType::player_context_state, alice.id(),
+                   std::chrono::seconds(3));
+  if (proto::decode_player_context_state(transitioned.payload).context !=
+      proto::PlayerContext::world_map)
+    throw std::runtime_error("PlayerContextState transition was not relayed");
+  alice.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{0, proto::PlayerContext::exploration});
+  const auto transitioned_back =
+      bob.wait_for(proto::MessageType::player_context_state, alice.id(),
+                   std::chrono::seconds(3));
+  if (proto::decode_player_context_state(transitioned_back.payload).context !=
+      proto::PlayerContext::exploration)
+    throw std::runtime_error(
+        "PlayerContextState did not return to exploration");
+
+  bob.send_message(
+      proto::MessageType::player_locomotion_state,
+      proto::PlayerLocomotionState{0, 1, 0, 0, 0, false, false, false, 0.0F});
+  (void)alice.wait_for(proto::MessageType::player_locomotion_state, bob.id(),
+                       std::chrono::seconds(3));
+  bob.send_message(
+      proto::MessageType::player_locomotion_state,
+      proto::PlayerLocomotionState{0, 3, 2, 0, 0, false, false, false, 0.0F});
+  const auto natural_fall =
+      alice.wait_for(proto::MessageType::player_locomotion_state, bob.id(),
+                     std::chrono::seconds(3));
+  if (proto::decode_player_locomotion_state(natural_fall.payload)
+          .locomotion_state != 2)
+    throw std::runtime_error("natural fall AIR state was not relayed");
+  alice.expect_absent(proto::MessageType::jump_event, bob.id(),
+                      std::chrono::milliseconds(300));
+
+  for (const auto stance : {std::uint8_t{1}, std::uint8_t{0}}) {
+    bob.send_message(proto::MessageType::player_locomotion_state,
+                     proto::PlayerLocomotionState{0, 1, 0, 0, stance, false,
+                                                  stance == 1, false, 0.0F});
+    const auto crouch_transition =
+        alice.wait_for(proto::MessageType::player_locomotion_state, bob.id(),
+                       std::chrono::seconds(3));
+    if (proto::decode_player_locomotion_state(crouch_transition.payload)
+            .stance != stance)
+      throw std::runtime_error("crouch stance transition was not relayed");
+  }
+
+  alice.send_message(
+      proto::MessageType::appearance_state,
+      proto::AppearanceState{0, "Lune", "Lune_Chic", "Lune_Face_01"});
+  const auto character_change =
+      bob.wait_for(proto::MessageType::appearance_state, alice.id(),
+                   std::chrono::seconds(3));
+  if (proto::decode_appearance_state(character_change.payload).player_id !=
+      alice.id())
+    throw std::runtime_error("character change lost network identity");
 
   bob.send_message(proto::MessageType::zone_state,
                    proto::ZoneState{bob.id(), "ZoneB"});
@@ -369,6 +472,14 @@ auto run_self_test(const Options &options) -> void {
                                                     0.0F});
   reconnected.send_message(proto::MessageType::movement_state,
                            proto::MovementState{old_alice_id, 1, 0});
+  reconnected.send_message(
+      proto::MessageType::player_context_state,
+      proto::PlayerContextState{old_alice_id,
+                                proto::PlayerContext::exploration});
+  reconnected.send_message(proto::MessageType::player_locomotion_state,
+                           proto::PlayerLocomotionState{old_alice_id, 1, 0, 0,
+                                                        0, false, false, false,
+                                                        0.0F});
   reconnected.send_message(proto::MessageType::zone_state,
                            proto::ZoneState{old_alice_id, "ZoneA"});
   (void)bob.wait_for(proto::MessageType::player_joined, reconnected.id(),

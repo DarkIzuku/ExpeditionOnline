@@ -29,6 +29,12 @@ auto lerp_angle_degrees(float from, float to, float alpha) -> float;
 auto snapshot_stream_is_stale(std::uint64_t now_ms,
                               std::uint64_t last_received_ms,
                               std::uint64_t stale_after_ms = 750) -> bool;
+auto snapshot_exceeds_teleport_threshold(
+    const protocol::TransformSnapshot &from,
+    const protocol::TransformSnapshot &to, float threshold_units) -> bool;
+auto context_requires_actor_reset(protocol::PlayerContext previous,
+                                  protocol::PlayerContext next) -> bool;
+auto context_supports_remote_actor(protocol::PlayerContext context) -> bool;
 
 auto infer_character_from_body_mesh(const std::string &mesh_path)
     -> std::string;

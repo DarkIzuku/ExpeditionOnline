@@ -138,9 +138,11 @@ struct Session {
   std::string peer;
   std::string player_name;
   std::string zone;
+  std::optional<proto::PlayerContextState> context;
   std::optional<proto::AppearanceState> appearance;
   std::optional<proto::TransformSnapshot> transform;
   std::optional<proto::MovementState> movement;
+  std::optional<proto::PlayerLocomotionState> locomotion;
   std::uint64_t last_jump_sequence{};
   bool has_jump_sequence{};
   std::atomic_bool alive{true};
@@ -323,6 +325,15 @@ private:
       handle_appearance(session, proto::decode_appearance_state(frame.payload),
                         frame.sequence);
       break;
+    case proto::MessageType::player_context_state:
+      handle_context(session, proto::decode_player_context_state(frame.payload),
+                     frame.sequence);
+      break;
+    case proto::MessageType::player_locomotion_state:
+      handle_locomotion(session,
+                        proto::decode_player_locomotion_state(frame.payload),
+                        frame.sequence);
+      break;
     case proto::MessageType::transform_snapshot:
       handle_transform(session, proto::decode_transform_snapshot(frame.payload),
                        frame.sequence);
@@ -394,6 +405,11 @@ private:
              proto::make_frame(proto::MessageType::zone_state,
                                next_server_sequence_++,
                                proto::ZoneState{peer_id, peer->zone})});
+        if (peer->context)
+          deliveries.push_back(
+              {session,
+               proto::make_frame(proto::MessageType::player_context_state,
+                                 next_server_sequence_++, *peer->context)});
         if (peer->appearance)
           deliveries.push_back(
               {session,
@@ -409,11 +425,21 @@ private:
               {session,
                proto::make_frame(proto::MessageType::movement_state,
                                  next_server_sequence_++, *peer->movement)});
+        if (peer->locomotion)
+          deliveries.push_back(
+              {session,
+               proto::make_frame(proto::MessageType::player_locomotion_state,
+                                 next_server_sequence_++, *peer->locomotion)});
         if (session->appearance)
           deliveries.push_back(
               {peer, proto::make_frame(proto::MessageType::appearance_state,
                                        next_server_sequence_++,
                                        *session->appearance)});
+        if (session->context)
+          deliveries.push_back(
+              {peer,
+               proto::make_frame(proto::MessageType::player_context_state,
+                                 next_server_sequence_++, *session->context)});
         if (session->transform)
           deliveries.push_back(
               {peer, proto::make_frame(proto::MessageType::transform_snapshot,
@@ -424,6 +450,11 @@ private:
               {peer,
                proto::make_frame(proto::MessageType::movement_state,
                                  next_server_sequence_++, *session->movement)});
+        if (session->locomotion)
+          deliveries.push_back(
+              {peer, proto::make_frame(
+                         proto::MessageType::player_locomotion_state,
+                         next_server_sequence_++, *session->locomotion)});
       }
     }
     deliver(deliveries);
@@ -435,8 +466,9 @@ private:
   auto handle_appearance(const std::shared_ptr<Session> &session,
                          proto::AppearanceState state, std::uint64_t sequence)
       -> void {
-    if (state.character_class.size() > 128 || state.outfit_mesh.size() > 2048 ||
-        state.hair_mesh.size() > 2048)
+    if (state.character_id.size() > 128 ||
+        state.customization_skin.size() > 512 ||
+        state.customization_face.size() > 512)
       throw proto::ProtocolError("appearance fields exceed server limits");
     state.player_id = session->id;
     std::vector<Delivery> deliveries;
@@ -451,7 +483,60 @@ private:
     }
     deliver(deliveries);
     logger_.write("APPEARANCE id=" + std::to_string(session->id) +
-                  " character=" + state.character_class);
+                  " character_id=" + state.character_id +
+                  " customization_skin=" + state.customization_skin +
+                  " customization_face=" + state.customization_face);
+  }
+
+  auto handle_context(const std::shared_ptr<Session> &session,
+                      proto::PlayerContextState state, std::uint64_t sequence)
+      -> void {
+    if (!proto::is_valid_player_context(state.context)) {
+      send_error(session, 1004, "invalid PlayerContext");
+      throw proto::ProtocolError("invalid PlayerContext");
+    }
+    state.player_id = session->id;
+    std::vector<Delivery> deliveries;
+    {
+      std::lock_guard lock(state_mutex_);
+      session->context = state;
+      if (!session->zone.empty())
+        append_zone_deliveries(
+            deliveries, session->zone, session->id,
+            proto::make_frame(proto::MessageType::player_context_state,
+                              sequence, state));
+    }
+    deliver(deliveries);
+    logger_.write("PLAYER_CONTEXT id=" + std::to_string(session->id) +
+                  " context=" + proto::player_context_name(state.context));
+  }
+
+  auto handle_locomotion(const std::shared_ptr<Session> &session,
+                         proto::PlayerLocomotionState state,
+                         std::uint64_t sequence) -> void {
+    if (state.movement_mode > 6 || !std::isfinite(state.aim_pitch) ||
+        std::fabs(state.aim_pitch) > 180.0F) {
+      send_error(session, 1004, "invalid PlayerLocomotionState");
+      throw proto::ProtocolError("invalid PlayerLocomotionState");
+    }
+    state.player_id = session->id;
+    std::vector<Delivery> deliveries;
+    {
+      std::lock_guard lock(state_mutex_);
+      session->locomotion = state;
+      if (!session->zone.empty())
+        append_zone_deliveries(
+            deliveries, session->zone, session->id,
+            proto::make_frame(proto::MessageType::player_locomotion_state,
+                              sequence, state));
+    }
+    deliver(deliveries);
+    logger_.write(
+        "PLAYER_LOCOMOTION id=" + std::to_string(session->id) +
+        " movement_mode=" + std::to_string(state.movement_mode) +
+        " locomotion_state=" + std::to_string(state.locomotion_state) +
+        " gait=" + std::to_string(state.gait) +
+        " stance=" + std::to_string(state.stance));
   }
 
   auto handle_transform(const std::shared_ptr<Session> &session,

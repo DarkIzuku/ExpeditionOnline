@@ -14,8 +14,9 @@ $bin = (Resolve-Path -LiteralPath $BinDirectory).Path
 $serverExe = Join-Path $bin "ExpeditionOnlineServer.exe"
 $probeExe = Join-Path $bin "ExpeditionOnlineProbe.exe"
 $helpText = (& $probeExe --help) -join "`n"
-if ($helpText -notmatch "--appearance-test" -or $helpText -notmatch "--idle-demo" -or $helpText -notmatch "--character" -or `
-    $helpText -notmatch "--outfit" -or $helpText -notmatch "--hair") {
+if ($helpText -notmatch "--appearance-test" -or $helpText -notmatch "--idle-demo" -or $helpText -notmatch "--char" -or `
+    $helpText -notmatch "--customization-skin" -or $helpText -notmatch "--customization-face" -or `
+    $helpText -notmatch "--full-exploration-demo" -or $helpText -notmatch "--context") {
     throw "Probe help is missing literal appearance test options"
 }
 $root = Join-Path $projectRoot "build\probe-demos"
@@ -35,7 +36,7 @@ $server = Start-Process -FilePath $serverExe -ArgumentList "--host", "127.0.0.1"
 try {
     Start-Sleep -Milliseconds 500
     $movement = Start-Process -FilePath $probeExe `
-        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "MovementDemo", "--zone", "DemoZone", "--snapshot-hz", "15", "--movement-demo" `
+        -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "MovementDemo", "--zone", "DemoZone", "--context", "exploration", "--snapshot-hz", "15", "--full-exploration-demo", "--crouch-demo" `
         -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $movementOut -RedirectStandardError $movementErr -PassThru
     $jump = Start-Process -FilePath $probeExe `
         -ArgumentList "--host", "127.0.0.1", "--port", $Port, "--name", "JumpDemo", "--zone", "DemoZone", "--snapshot-hz", "15", "--jump-demo" `
@@ -50,8 +51,14 @@ try {
     if ($movement.ExitCode -ne 0 -or $jump.ExitCode -ne 0 -or $idle.ExitCode -ne 0) { throw "Probe demo failed" }
     $movementText = Get-Content -Raw -LiteralPath $movementOut
     $jumpText = Get-Content -Raw -LiteralPath $jumpOut
-    foreach ($phase in @("IDLE", "WALK", "RUN", "STOP")) {
+    foreach ($phase in @("IDLE", "WALK", "RUN", "SPRINT", "STOP")) {
         if ($movementText -notmatch "DEMO_PHASE movement=$phase") { throw "Movement demo is missing $phase" }
+    }
+    foreach ($gait in @("gait=1", "gait=2", "gait=3")) {
+        if ($movementText -notmatch [regex]::Escape($gait)) { throw "Full demo is missing $gait" }
+    }
+    if ($movementText -notmatch 'stance=1[^\r\n]*crouching=true') {
+        throw "Full demo is missing the crouch locomotion state"
     }
     foreach ($phase in @("GROUND", "ASCEND", "APEX", "DESCEND", "LAND")) {
         if ($jumpText -notmatch "jump=$phase") { throw "Jump demo is missing $phase" }
