@@ -16,7 +16,8 @@ $probeExe = Join-Path $bin "ExpeditionOnlineProbe.exe"
 $helpText = (& $probeExe --help) -join "`n"
 if ($helpText -notmatch "--appearance-test" -or $helpText -notmatch "--idle-demo" -or $helpText -notmatch "--char" -or `
     $helpText -notmatch "--customization-skin" -or $helpText -notmatch "--customization-face" -or `
-    $helpText -notmatch "--full-exploration-demo" -or $helpText -notmatch "--context") {
+    $helpText -notmatch "--full-exploration-demo" -or $helpText -notmatch "--context" -or `
+    $helpText -notmatch "--demo-radius") {
     throw "Probe help is missing literal appearance test options"
 }
 $root = Join-Path $projectRoot "build\probe-demos"
@@ -56,6 +57,9 @@ try {
     }
     foreach ($gait in @("gait=1", "gait=2", "gait=3")) {
         if ($movementText -notmatch [regex]::Escape($gait)) { throw "Full demo is missing $gait" }
+    }
+    if ($movementText -notmatch 'PROBE_SYNTHETIC_GROUND z_is_fixed=true terrain_following=false demo_radius=250') {
+        throw "Full demo is missing the fixed-Z terrain warning and conservative radius"
     }
     if ($movementText -notmatch 'stance=1[^\r\n]*crouching=true') {
         throw "Full demo is missing the crouch locomotion state"

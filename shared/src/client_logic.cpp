@@ -146,9 +146,47 @@ auto select_effective_appearance(
     const std::optional<protocol::AppearanceState> &last_valid,
     const protocol::AppearanceState &candidate)
     -> std::optional<protocol::AppearanceState> {
-  if (appearance_is_ready(candidate))
+  if (!appearance_is_ready(candidate))
+    return last_valid;
+  if (!last_valid || last_valid->character_id != candidate.character_id)
     return candidate;
-  return last_valid;
+  auto merged = candidate;
+  if (merged.customization_skin.empty())
+    merged.customization_skin = last_valid->customization_skin;
+  if (merged.customization_face.empty())
+    merged.customization_face = last_valid->customization_face;
+  return merged;
+}
+
+auto customization_capture_is_due(bool dirty, std::uint64_t now_ms,
+                                  std::uint64_t due_ms) -> bool {
+  return dirty && now_ms >= due_ms;
+}
+
+auto should_run_legacy_visual_diagnostics(std::string_view remote_actor_mode,
+                                          bool explicitly_enabled) -> bool {
+  return explicitly_enabled || remote_actor_mode == "ai_companion_legacy";
+}
+
+auto should_suppress_remote_companions(std::string_view backend,
+                                       bool actor_is_local) -> bool {
+  return !actor_is_local && backend == "world_character";
+}
+
+auto rotation_drift_degrees(float expected, float observed) -> float {
+  return std::abs(normalized_degrees(observed - expected));
+}
+
+auto bounded_demo_offset(float travelled_distance, float radius) -> float {
+  const auto safe_radius = std::abs(radius);
+  if (safe_radius <= 0.0F)
+    return 0.0F;
+  const auto period = safe_radius * 4.0F;
+  auto phase = std::fmod(travelled_distance + safe_radius, period);
+  if (phase < 0.0F)
+    phase += period;
+  return phase <= safe_radius * 2.0F ? phase - safe_radius
+                                    : safe_radius * 3.0F - phase;
 }
 
 auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int {

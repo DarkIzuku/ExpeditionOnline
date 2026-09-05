@@ -330,6 +330,50 @@ auto test_appearance_selection() -> void {
         "empty optional Probe meshes do not trigger retries");
 }
 
+auto test_runtime_correction_logic() -> void {
+  const proto::AppearanceState known{7, "Maelle", "Maelle_Alicia",
+                                     "Maelle_Face_02"};
+  const proto::AppearanceState temporarily_empty{7, "Maelle", "", ""};
+  const auto preserved =
+      logic::select_effective_appearance(known, temporarily_empty);
+  check(preserved && preserved->customization_skin == "Maelle_Alicia" &&
+            preserved->customization_face == "Maelle_Face_02",
+        "last-known-good customization survives an empty capture");
+  const proto::AppearanceState switched{7, "Lune", "", ""};
+  const auto switched_result = logic::select_effective_appearance(known, switched);
+  check(switched_result && switched_result->character_id == "Lune" &&
+            switched_result->customization_skin.empty(),
+        "character switch does not inherit previous customization IDs");
+
+  check(!logic::customization_capture_is_due(false, 500, 100),
+        "clean customization does not capture");
+  check(!logic::customization_capture_is_due(true, 99, 100),
+        "customization debounce is honored");
+  check(logic::customization_capture_is_due(true, 100, 100),
+        "dirty customization captures at debounce deadline");
+
+  check(!logic::should_run_legacy_visual_diagnostics("world_character", false),
+        "world-character skips legacy appearance scans");
+  check(logic::should_run_legacy_visual_diagnostics("world_character", true) &&
+            logic::should_run_legacy_visual_diagnostics(
+                "ai_companion_legacy", false),
+        "legacy diagnostics remain explicitly available");
+  check(logic::should_suppress_remote_companions("world_character", false),
+        "remote world-character requests companion suppression");
+  check(!logic::should_suppress_remote_companions("world_character", true) &&
+            !logic::should_suppress_remote_companions("world_map", false),
+        "companion suppression never targets local or world-map actors");
+
+  check(std::fabs(logic::rotation_drift_degrees(179.0F, -179.0F) - 2.0F) <
+            0.001F,
+        "rotation drift follows the shortest angular path");
+  for (int distance = 0; distance <= 10000; distance += 37) {
+    check(std::fabs(logic::bounded_demo_offset(static_cast<float>(distance),
+                                               250.0F)) <= 250.001F,
+          "Probe demo offset stays inside configured radius");
+  }
+}
+
 auto test_local_movement_state_classification() -> void {
   using Phase = logic::VerticalMovementPhase;
   check(logic::classify_vertical_movement(false, 600.0F) == Phase::ground,
@@ -393,6 +437,7 @@ auto main() -> int {
     test_rejections();
     test_snapshot_interpolation();
     test_appearance_selection();
+    test_runtime_correction_logic();
     test_local_movement_state_classification();
     test_remote_asset_safety();
     std::cout << "All protocol tests passed\n";

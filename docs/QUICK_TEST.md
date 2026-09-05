@@ -1,6 +1,6 @@
 # Prueba rápida de Exploration vNext
 
-Esta build es `0.6.0-rc1`, protocolo 5. Servidor, Probe y `main.dll` deben salir
+Esta build es `0.6.0-rc2`, protocolo 5. Servidor, Probe y `main.dll` deben salir
 del mismo workflow. No sincroniza combate, historia, quests, inventario ni
 saves.
 
@@ -10,11 +10,13 @@ En `Host`, inicia `ExpeditionOnlineServer.exe`. Desde `Probe`, una demo completa
 de exploración se ejecuta con una sola línea:
 
 ```powershell
-.\ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name Probe --zone ProbeZone --context exploration --char Maelle --customization-skin Maelle_ActeIII --customization-face Maelle_Face_02 --snapshot-hz 15 --full-exploration-demo --crouch-demo
+.\ExpeditionOnlineProbe.exe --host 127.0.0.1 --port 7777 --name Probe --zone ProbeZone --context exploration --char Maelle --customization-skin Maelle_ActeIII --customization-face Maelle_Face_02 --snapshot-hz 15 --demo-radius 250 --full-exploration-demo --crouch-demo
 ```
 
 La salida debe recorrer IDLE, WALK, RUN, SPRINT, STOP, un único JumpEvent,
-AIR y vuelta a STOP. `PlayerLocomotionState` se envía solo cuando cambia.
+AIR y vuelta a STOP. `PlayerLocomotionState` se envía solo cuando cambia. La
+trayectoria sintética queda dentro de 250 units y conserva Z base fija: no
+sigue el terreno ni debe usarse para diagnosticar slopes.
 
 ## Preparación dentro del juego
 
@@ -28,6 +30,9 @@ AIR y vuelta a STOP. `PlayerLocomotionState` se envía solo cuando cambia.
    `LOCAL_CHARACTER_ID`, `LOCAL_CUSTOMIZATION` y `LOCAL_TRANSFORM`.
 5. No debe repetirse `GAME_BRIDGE_EXCEPTION ... bad allocation`. Si ocurre,
    conserva la línea completa, incluido `stage=`.
+6. Para estudiar rotación, cambia temporalmente
+   `rotation_diagnostics=true`; `REMOTE_ROTATION_AUTHORITY` separa yaw de
+   snapshot/render, Actor y mesh. Devuélvelo a `false` tras la prueba.
 
 ## Prueba normal de exploración
 
@@ -37,18 +42,21 @@ AIR y vuelta a STOP. `PlayerLocomotionState` se envía solo cuando cambia.
    `--x`, `--y`, `--z` y `--yaw`.
 4. Confirma `REMOTE_SPAWNED ... backend=world_character` y que el actor sea
    `BP_jRPG_Character_World_C`, no un companion salvo fallback explícito.
-5. Comprueba `REMOTE_NETWORK_AUTHORITY ... movement_tick_enabled=false`, con
+5. Confirma `REMOTE_CHARACTER_CONTEXT_RESTORED`, supresión pre/post y
+   `REMOTE_COMPANION_UNSPAWN`; solo debe quedar el avatar remoto principal.
+6. Comprueba `REMOTE_NETWORK_AUTHORITY ... movement_tick_enabled=false`, con
    Actor y mesh tick activos.
-6. Busca `REMOTE_CUSTOMIZATION_APPLIED ... reflection_validated=true`. Si la
+7. Busca `REMOTE_CHARACTER_DATA ... success=true` y
+   `REMOTE_CUSTOMIZATION_APPLIED ... reflection_validated=true`. Si la
    ABI o una propiedad no coincide, el resultado correcto es un
    `REMOTE_APPEARANCE_FAIL_OPEN` con razón; no debe haber crash ni escritura
    directa de meshes.
-7. Observa Idle/Walk/Run/Sprint/Stop y un salto. Deben aparecer
+8. Observa Idle/Walk/Run/Sprint/Stop y un salto. Deben aparecer
    `REMOTE_LOCOMOTION`, un solo `REMOTE_JUMP_EVENT`, MovementMode AIR y
    Velocity calculada desde snapshots.
-8. Para caída natural usa un Probe/cliente que envíe AIR sin JumpEvent: el
+9. Para caída natural usa un Probe/cliente que envíe AIR sin JumpEvent: el
    remoto debe caer visualmente sin reproducir impulso de salto.
-9. Cambia de personaje y outfit. El PlayerId debe permanecer, el actor visual
+10. Cambia de personaje y outfit. El PlayerId debe permanecer, el actor visual
    debe recrearse, y deben reaplicarse customization, transform, movimiento,
    gait y stance.
 

@@ -97,6 +97,10 @@ auto load_client_config(const std::filesystem::path &path) -> ClientConfig {
       config.sync_crouch = parse_bool(value);
     else if (key == "sync_aim")
       config.sync_aim = parse_bool(value);
+    else if (key == "legacy_visual_diagnostics")
+      config.legacy_visual_diagnostics = parse_bool(value);
+    else if (key == "rotation_diagnostics")
+      config.rotation_diagnostics = parse_bool(value);
     else if (key == "unsafe_direct_appearance")
       config.unsafe_direct_appearance = parse_bool(value);
     else if (key == "unsafe_direct_hair")

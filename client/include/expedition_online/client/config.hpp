@@ -24,6 +24,8 @@ struct ClientConfig {
   bool sync_gait{true};
   bool sync_crouch{true};
   bool sync_aim{true};
+  bool legacy_visual_diagnostics{false};
+  bool rotation_diagnostics{false};
   bool unsafe_direct_appearance{false};
   bool unsafe_direct_hair{false};
   float teleport_threshold_units{5000.0F};

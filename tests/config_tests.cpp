@@ -25,6 +25,7 @@ auto main() -> int {
              "world_map_remote=false\nremote_actor_mode=ai_companion_legacy\n"
              "sync_locomotion_state=false\nsync_gait=false\n"
              "sync_crouch=false\nsync_aim=false\n"
+             "legacy_visual_diagnostics=true\nrotation_diagnostics=true\n"
              "teleport_threshold_units=1234\n"
              "unsafe_direct_appearance=true\nunsafe_direct_hair=on\n";
     }
@@ -33,6 +34,7 @@ auto main() -> int {
         parsed.fallback_ai_companion || parsed.vanilla_customization ||
         parsed.world_map_remote || parsed.sync_locomotion_state ||
         parsed.sync_gait || parsed.sync_crouch || parsed.sync_aim ||
+        !parsed.legacy_visual_diagnostics || !parsed.rotation_diagnostics ||
         parsed.remote_actor_mode != "ai_companion_legacy" ||
         parsed.teleport_threshold_units != 1234.0F ||
         !parsed.unsafe_direct_appearance || !parsed.unsafe_direct_hair) {
@@ -53,6 +55,7 @@ auto main() -> int {
         !defaults.vanilla_customization || !defaults.world_map_remote ||
         !defaults.sync_locomotion_state || !defaults.sync_gait ||
         !defaults.sync_crouch || !defaults.sync_aim ||
+        defaults.legacy_visual_diagnostics || defaults.rotation_diagnostics ||
         defaults.remote_actor_mode != "world_character" ||
         defaults.teleport_threshold_units != 5000.0F ||
         defaults.unsafe_direct_appearance || defaults.unsafe_direct_hair) {

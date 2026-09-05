@@ -1,6 +1,6 @@
 # ExpeditionOnline
 
-`0.6.0-rc1` is the Exploration vNext candidate for *Clair Obscur:
+`0.6.0-rc2` is the Exploration vNext runtime-correction candidate for *Clair Obscur:
 Expedition 33*. It combines ExpeditionOnline's timestamped TCP relay,
 interpolation, explicit JumpEvent and remote network authority with the
 independent world-character, world-map and vanilla customization routes found
@@ -54,6 +54,8 @@ sync_locomotion_state=true
 sync_gait=true
 sync_crouch=true
 sync_aim=true
+legacy_visual_diagnostics=false
+rotation_diagnostics=false
 teleport_threshold_units=5000
 ```
 

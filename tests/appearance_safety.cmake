@@ -36,6 +36,26 @@ if(skin_object_filter_position EQUAL -1 OR
             "ProcessEvent must reject untracked objects before allocating function names")
 endif()
 
+string(FIND "${game_bridge_source}" "run_stage(\"customization\"" customization_stage_position)
+string(FIND "${game_bridge_source}" "run_stage(\"transform\"" transform_stage_position)
+string(FIND "${game_bridge_source}" "run_stage(\"movement\"" movement_stage_position)
+if(customization_stage_position EQUAL -1 OR
+   transform_stage_position EQUAL -1 OR
+   movement_stage_position EQUAL -1 OR
+   customization_stage_position GREATER transform_stage_position OR
+   transform_stage_position GREATER movement_stage_position)
+    message(FATAL_ERROR
+            "Customization must fail open before independent transform and movement stages")
+endif()
+
+string(FIND "${game_bridge_source}" "apply_remote_jump_events(player_id, remote);" remote_jump_position)
+string(FIND "${game_bridge_source}" "apply_remote_transform(player_id, remote);" remote_transform_position)
+if(remote_jump_position EQUAL -1 OR remote_transform_position EQUAL -1 OR
+   remote_jump_position GREATER remote_transform_position)
+    message(FATAL_ERROR
+            "The preserved JumpEvent path must run before the final network transform authority")
+endif()
+
 foreach(required_marker IN ITEMS
         "UAssetRegistryHelpers::GetAsset"
         "REMOTE_ASSET_LOAD_FAILED"
@@ -46,7 +66,6 @@ foreach(required_marker IN ITEMS
         "REMOTE_DYNAMIC_MESH_COMPONENT"
         "CHARACTER_SKIN_PROPERTY"
         "REMOTE_OUTFIT_DRIFT"
-        "LOCAL_JUMP_SIGNAL"
         "LOCAL_JUMP_EVENT"
         "LOCAL_JUMP_STARTED"
         "REMOTE_JUMP_EVENT"
@@ -54,6 +73,17 @@ foreach(required_marker IN ITEMS
         "REMOTE_NETWORK_AUTHORITY"
         "REMOTE_APPEARANCE_DEFERRED"
         "LOCAL_SKIN_EVENT"
+        "GAME_BRIDGE_RECOVERED"
+        "update_local_player."
+        "run_stage(\"customization\""
+        "REMOTE_WORLD_CHARACTER_SPAWN_BEGIN"
+        "BeginDeferredActorSpawnFromClass"
+        "REMOTE_COMPANION_SUPPRESSION"
+        "REMOTE_COMPANION_UNSPAWN"
+        "REMOTE_CHARACTER_DATA"
+        "CUSTOMIZATION_LAYOUT_VALIDATED"
+        "REMOTE_CUSTOMIZATION_APPLY"
+        "REMOTE_ROTATION_AUTHORITY"
         "CSAP_SwapAssign")
     string(FIND "${game_bridge_source}" "${required_marker}" marker_position)
     if(marker_position EQUAL -1)
@@ -64,7 +94,8 @@ endforeach()
 foreach(forbidden_call IN ITEMS
         "LaunchCharacter"
         "AddImpulse"
-        "AddForce")
+        "AddForce"
+        "ExportTextItem")
     string(FIND "${game_bridge_source}" "${forbidden_call}" forbidden_position)
     if(NOT forbidden_position EQUAL -1)
         message(FATAL_ERROR "Remote jump path must not add local physics: ${forbidden_call}")
@@ -74,6 +105,8 @@ endforeach()
 file(READ "${CONFIG_HEADER}" config_header_source)
 foreach(default_marker IN ITEMS
         "remote_network_authority{true}"
+        "legacy_visual_diagnostics{false}"
+        "rotation_diagnostics{false}"
         "unsafe_direct_appearance{false}"
         "unsafe_direct_hair{false}")
     string(FIND "${config_header_source}" "${default_marker}" default_position)
@@ -85,6 +118,8 @@ endforeach()
 file(READ "${CONFIG_EXAMPLE}" config_example_source)
 foreach(config_marker IN ITEMS
         "remote_network_authority=true"
+        "legacy_visual_diagnostics=false"
+        "rotation_diagnostics=false"
         "unsafe_direct_appearance=false"
         "unsafe_direct_hair=false")
     string(FIND "${config_example_source}" "${config_marker}" config_position)

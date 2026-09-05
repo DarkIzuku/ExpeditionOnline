@@ -34,7 +34,7 @@ class ExpeditionOnlineMod final : public RC::CppUserModBase {
 public:
   ExpeditionOnlineMod() {
     ModName = STR("ExpeditionOnline");
-    ModVersion = STR("0.6.0-rc1");
+    ModVersion = STR("0.6.0-rc2");
     ModDescription = STR("Exploration-only online co-op relay prototype for "
                          "Clair Obscur: Expedition 33");
     ModAuthors = STR("ExpeditionOnline contributors");
@@ -74,6 +74,10 @@ public:
           " vanilla_customization=" +
           (config_.vanilla_customization ? "true" : "false") +
           " world_map_remote=" + (config_.world_map_remote ? "true" : "false") +
+          " legacy_visual_diagnostics=" +
+          (config_.legacy_visual_diagnostics ? "true" : "false") +
+          " rotation_diagnostics=" +
+          (config_.rotation_diagnostics ? "true" : "false") +
           " unsafe_direct_appearance=" +
           (config_.unsafe_direct_appearance ? "true" : "false") +
           " unsafe_direct_hair=" +

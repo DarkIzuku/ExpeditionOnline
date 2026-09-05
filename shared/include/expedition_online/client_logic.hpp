@@ -43,6 +43,14 @@ auto select_effective_appearance(
     const std::optional<protocol::AppearanceState> &last_valid,
     const protocol::AppearanceState &candidate)
     -> std::optional<protocol::AppearanceState>;
+auto customization_capture_is_due(bool dirty, std::uint64_t now_ms,
+                                  std::uint64_t due_ms) -> bool;
+auto should_run_legacy_visual_diagnostics(std::string_view remote_actor_mode,
+                                          bool explicitly_enabled) -> bool;
+auto should_suppress_remote_companions(std::string_view backend,
+                                       bool actor_is_local) -> bool;
+auto rotation_drift_degrees(float expected, float observed) -> float;
+auto bounded_demo_offset(float travelled_distance, float radius) -> float;
 auto appearance_retry_delay_ms(std::size_t consecutive_failures) -> int;
 
 enum class AssetResolutionSource {

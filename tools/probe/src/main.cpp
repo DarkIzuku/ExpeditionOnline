@@ -32,6 +32,7 @@ struct Options {
   float z{};
   float yaw{};
   float radius{300.0F};
+  float demo_radius{250.0F};
   float angular_speed{1.0F};
   int snapshot_hz{4};
   bool duration_explicit{};
@@ -68,6 +69,8 @@ auto print_usage() -> void {
       << "  --z <float>         Fixed Z from LOCAL_TRANSFORM (default: 0)\n"
       << "  --yaw <float>       Fixed yaw in degrees (default: 0)\n"
       << "  --radius <float>    Circular movement radius (default: 300)\n"
+      << "  --demo-radius <float>  Maximum synthetic demo offset (default: "
+         "250)\n"
       << "  --angular-speed <float>  Circle speed in radians/sec (default: 1)\n"
       << "  --snapshot-hz <rate> Snapshot send rate in Hz (default: 4)\n"
       << "  --movement-demo      Idle 5s, walk 10s, run 10s, stop 5s\n"
@@ -139,6 +142,8 @@ auto parse_options(int argc, char **argv) -> Options {
       options.yaw = std::stof(next_value());
     else if (argument == "--radius")
       options.radius = std::stof(next_value());
+    else if (argument == "--demo-radius")
+      options.demo_radius = std::stof(next_value());
     else if (argument == "--angular-speed")
       options.angular_speed = std::stof(next_value());
     else if (argument == "--snapshot-hz")
@@ -164,11 +169,15 @@ auto parse_options(int argc, char **argv) -> Options {
     throw std::runtime_error("duration must be at least 1 second");
   if (!std::isfinite(options.x) || !std::isfinite(options.y) ||
       !std::isfinite(options.z) || !std::isfinite(options.yaw) ||
-      !std::isfinite(options.radius) || !std::isfinite(options.angular_speed)) {
+      !std::isfinite(options.radius) ||
+      !std::isfinite(options.demo_radius) ||
+      !std::isfinite(options.angular_speed)) {
     throw std::runtime_error("position, yaw and radius must be finite numbers");
   }
   if (options.radius < 0.0F)
     throw std::runtime_error("radius must be zero or greater");
+  if (options.demo_radius < 0.0F || options.demo_radius > 5000.0F)
+    throw std::runtime_error("demo-radius must be in 0..5000");
   if (options.snapshot_hz < 1 || options.snapshot_hz > 60) {
     throw std::runtime_error("snapshot-hz must be in 1..60");
   }
@@ -223,8 +232,10 @@ auto demo_transform(const Options &options, float elapsed) -> DemoTransform {
       distance = 6650.0F;
     }
     const auto yaw_radians = options.yaw * 3.14159265358979323846F / 180.0F;
-    result.x = options.x + std::cos(yaw_radians) * distance;
-    result.y = options.y + std::sin(yaw_radians) * distance;
+    const auto offset =
+        logic::bounded_demo_offset(distance, options.demo_radius);
+    result.x = options.x + std::cos(yaw_radians) * offset;
+    result.y = options.y + std::sin(yaw_radians) * offset;
   } else if (options.movement_demo) {
     float distance{};
     if (elapsed < 5.0F)
@@ -242,8 +253,10 @@ auto demo_transform(const Options &options, float elapsed) -> DemoTransform {
       distance = 6800.0F;
     }
     const auto yaw_radians = options.yaw * 3.14159265358979323846F / 180.0F;
-    result.x = options.x + std::cos(yaw_radians) * distance;
-    result.y = options.y + std::sin(yaw_radians) * distance;
+    const auto offset =
+        logic::bounded_demo_offset(distance, options.demo_radius);
+    result.x = options.x + std::cos(yaw_radians) * offset;
+    result.y = options.y + std::sin(yaw_radians) * offset;
   } else if (!options.jump_demo) {
     const auto angle = elapsed * options.angular_speed;
     result.x = options.x + std::cos(angle) * options.radius;
@@ -417,6 +430,7 @@ auto main(int argc, char **argv) -> int {
               << " context=" << proto::player_context_name(options.context)
               << " base=" << options.x << ',' << options.y << ',' << options.z
               << " yaw=" << options.yaw << " radius=" << options.radius
+              << " demo_radius=" << options.demo_radius
               << " angular_speed=" << options.angular_speed
               << " snapshot_hz=" << options.snapshot_hz
               << " movement_demo=" << (options.movement_demo ? "true" : "false")
@@ -429,6 +443,12 @@ auto main(int argc, char **argv) -> int {
               << (options.full_exploration_demo ? "true" : "false")
               << " crouch_demo=" << (options.crouch_demo ? "true" : "false")
               << '\n';
+    if (options.movement_demo || options.jump_demo ||
+        options.full_exploration_demo) {
+      std::cout << "PROBE_SYNTHETIC_GROUND z_is_fixed=true "
+                   "terrain_following=false demo_radius="
+                << options.demo_radius << '\n';
+    }
 
     proto::FrameDecoder decoder;
     std::array<std::uint8_t, 64U * 1024U> buffer{};

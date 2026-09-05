@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace RC::Unreal {
 class AActor;
@@ -74,6 +75,7 @@ private:
     bool clock_offset_initialized{};
     bool network_authority_configured{};
     bool transform_drift_initialized{};
+    bool rotation_drift_initialized{};
     bool jump_target_warning_logged{};
     std::uint64_t last_jump_sequence_received{};
     std::uint64_t last_jump_sequence_applied{};
@@ -86,6 +88,8 @@ private:
     float last_after_x{};
     float last_after_y{};
     float last_after_z{};
+    float last_actor_yaw_after{};
+    float last_mesh_world_yaw_after{};
     std::size_t appearance_attempt_count{};
     double clock_offset_ms{};
     std::uint64_t last_transform_received_ms{};
@@ -94,6 +98,7 @@ private:
     std::chrono::steady_clock::time_point next_appearance_retry{};
     std::chrono::steady_clock::time_point next_visual_verification{};
     std::chrono::steady_clock::time_point next_transform_drift_log{};
+    std::chrono::steady_clock::time_point next_rotation_log{};
     std::chrono::steady_clock::time_point next_movement_component_state_log{};
   };
 
@@ -121,6 +126,9 @@ private:
   auto verify_remote_visual_state(std::uint64_t player_id, RemotePlayer &remote)
       -> void;
   auto update_local_jump_diagnostics(RC::Unreal::AActor *pawn) -> void;
+  auto suppress_remote_companions(std::uint64_t player_id,
+                                  RC::Unreal::AActor *actor,
+                                  const char *phase) -> void;
   auto disable_remote_ai(RC::Unreal::AActor *actor) -> void;
   auto destroy_remote_actor(std::uint64_t player_id, RemotePlayer &remote,
                             bool reset_interpolation) -> void;
@@ -158,12 +166,20 @@ private:
   std::unordered_map<RC::Unreal::UObject *, std::string> local_skin_objects_;
   std::unordered_map<std::string, std::string> local_skin_signals_;
   std::unordered_map<std::string, RC::Unreal::UObject *> asset_cache_;
+  struct StageFailureState {
+    std::chrono::steady_clock::time_point next_log{};
+    std::chrono::steady_clock::time_point last_failure{};
+    std::size_t suppressed{};
+  };
+  std::unordered_map<std::string, StageFailureState> local_stage_failures_;
+  std::unordered_set<std::string> local_customization_layouts_logged_;
   std::size_t appearance_failure_count_{};
   std::uint64_t local_jump_sequence_{};
   std::chrono::steady_clock::time_point last_local_jump_started_{};
   bool resync_requested_{};
   bool exploration_available_{};
   bool network_was_connected_{};
+  bool local_customization_dirty_{true};
   bool shutdown_{};
   std::chrono::steady_clock::time_point next_bridge_tick_{};
   std::chrono::steady_clock::time_point next_appearance_capture_{};
